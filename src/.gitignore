@@ -1,0 +1,14 @@
+# Build-related files in src/
+*~
+*.bak
+bochsout.txt
+*.o
+kernel
+image
+createimage
+bootblock
+lnxsh
+.depend
+entry-pp.s
+usbV86-pp.s
+floppy.img
