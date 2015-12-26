@@ -111,7 +111,9 @@ typedef unsigned long ulong_t;
 typedef struct {
     // Fill in your stat here, this is just an example
     int inodeNo;        /* the file i-node number */
-    short type;         /* the file i-node type, DIRECTORY, FILE_TYPE (there's another value FREE_INODE which never appears here */
+    short type;         /* the file i-node type, DIRECTORY, FILE_TYPE
+    					   (there's another value FREE_INODE which never
+    					   appears here) */
     char links;         /* number of links to the i-node */
     int size;           /* file size in bytes */
     int numBlocks;      /* number of blocks used by the file */

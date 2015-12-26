@@ -15,9 +15,21 @@
 #define ERROR_MSG(m)
 #endif
 
+static superblock_t superblock;
+
 void fs_init(void) {
     block_init();
-    /* More code HERE */
+    
+    /* Format disk if is not already */
+    block_read(SUPER_BLOCK, &superblock);
+    if (superblock.magic_num != SUPER_MAGIC_NUM) {
+        /* Intialize the superblock */
+        bzero_block(&superblock);
+        superblock_init(&superblock);
+        block_write(SUPER_BLOCK, &superblock);
+
+
+    }
 }
 
 int fs_mkfs(void) {
