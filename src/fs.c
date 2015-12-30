@@ -143,14 +143,18 @@ static void wdir_append_path(char *dirname) {
     str_append("/", wdir.path);
 }
 
-/* File descriptors **********************************************************/
+/* Directories ***************************************************************/
 
-static fd_t fd_table[MAX_FILE_COUNT];
+// TODO: stuff
 
-static int fd_open_count = 0;
+/* File descriptor table *****************************************************/
 
-static void fd_init(fd_t *fd) {
-    fd->is_open = FALSE;
+static file_t fd_table[MAX_FILE_COUNT];
+
+static int fd_open_count;
+
+static void fd_init(int fd) {
+    fd_table[fd].is_open = FALSE;
 }
 
 /* File system operations ****************************************************/
@@ -183,6 +187,7 @@ int fs_mkfs(void) {
     uint8_t *root_in_use;
 
     // If just formatted, write necessary data to disk
+    sblock = sblock_read();
     if (sblock->magic_num != SUPER_MAGIC_NUM) {
         // Write super block to disk
         sblock_init(sblock);
@@ -199,9 +204,12 @@ int fs_mkfs(void) {
         bamap_write(ROOT_DIR);
     }
 
+    // TODO: Initialize root directory
+
     // Initialize the file descriptor table
+    fd_open_count = 0;
     for (i = 0; i < MAX_FILE_COUNT; i++) {
-        fd_init(&fd_table[i]);
+        fd_init(i);
     }
 }
 

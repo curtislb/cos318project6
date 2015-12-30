@@ -68,18 +68,18 @@ typedef struct {
     char path[MAX_PATH_NAME];
 } wdir_t;
 
-// File descriptor
-typedef struct {
-    bool_t is_open;
-    int inode;
-    short mode;
-    int cursor;
-} fd_t;
-
 // Directory entry
 typedef struct {
     int inode;
     char name[MAX_FILE_NAME];
 } entry_t;
+
+// File descriptor table entry
+typedef struct {
+    bool_t is_open;
+    int inode;
+    short mode;
+    int cursor;
+} file_t;
 
 #endif
