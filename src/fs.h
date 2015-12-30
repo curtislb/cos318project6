@@ -33,41 +33,53 @@ int fs_stat(char *fileName, fileStat *buf);
 #define SUPER_MAGIC_NUM 0xa455
 
 typedef struct {
-    uint16_t magic_num; // Indicates that disk is formatted
-    uint32_t fs_size; // Size of file system in blocks
+    int magic_num; // Indicates that disk is formatted
+    int fs_size; // Size of file system in blocks
 
-    uint32_t inode_start; // First block where inodes are stored
-    uint32_t inode_count; // Number of inodes that can be allocated
-    uint32_t inode_blocks; // Number of blocks allocated to store inodes
+    int inode_start; // First block where inodes are stored
+    int inode_count; // Number of inodes that can be allocated
 
-    uint32_t bamap_start; // First block of block allocation map
-    uint32_t bamap_blocks; // Size of block allocation map in blocks
+    int bamap_start; // First block of block allocation map
 
-    uint32_t data_start; // First data block
-    uint32_t data_blocks; // Number of data blocks that can be allocated
-} superblock_t;
+    int data_start; // First data block
+    int data_blocks; // Number of data blocks that can be allocated
+} sblock_t;
 
 /* i-Nodes *******************************************************************/
 
 #define INODE_ADDRS 8
-#define INODE_SIZE 24
 
 typedef struct {
-    uint16_t type; // the file type (DIRECTORY, FILE_TYPE)
-    uint8_t links; // number of links to the i-node
-    uint32_t size; // file size in bytes
-    uint16_t blocks[INODE_ADDRS]; // file data blocks
+    short type; // the file type (DIRECTORY, FILE_TYPE)
+    char links; // number of links to the i-node
+    char fd_count; // number of open file descriptors
+    int size; // file size in bytes
+    short blocks[INODE_ADDRS]; // file data blocks
 } inode_t;
 
-/* Directories ***************************************************************/
+/* Files and directories *****************************************************/
 
-#define DIR_SEP "/"
 #define ROOT_DIR 0
 
+// Working directory
 typedef struct {
     int inode;
     char name[MAX_FILE_NAME];
     char path[MAX_PATH_NAME];
 } wdir_t;
+
+// File descriptor
+typedef struct {
+    bool_t is_open;
+    int inode;
+    short mode;
+    int cursor;
+} fd_t;
+
+// Directory entry
+typedef struct {
+    int inode;
+    char name[MAX_FILE_NAME];
+} entry_t;
 
 #endif

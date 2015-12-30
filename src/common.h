@@ -146,9 +146,4 @@ typedef struct {
 // 	int size;		//	Size in number of sectors
 // };
 
-/* Custom helper macros */
-
-// Divides x by y and rounds up the result to the nearest (positive) integer
-#define CEIL_DIV(x,y) (1 + ((x - 1) / y))
-
 #endif

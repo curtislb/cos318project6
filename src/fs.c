@@ -15,100 +15,111 @@
 #define ERROR_MSG(m)
 #endif
 
-/* Data buffers and typed pointers *******************************************/
+/* Data buffers **************************************************************/
 
-static char super_buf[BLOCK_SIZE];
-static char inode_buf[CEIL_DIV(MAX_FILE_COUNT * INODE_SIZE, BLOCK_SIZE)];
-static char bamap_buf[CEIL_DIV(MAX_FILE_COUNT, BLOCK_SIZE)];
+static char sblock_buf[BLOCK_SIZE];
+static char inode_buf[2 * BLOCK_SIZE]; // inode may cross block boundary
+static char bamap_buf[BLOCK_SIZE];
+static char block_buf[BLOCK_SIZE]; // for additional data
 
-static superblock_t *superblock;
-static inode_t *inodes;
-static uint8_t *ba_map;
+/* Static helper functions ***************************************************/
 
-/* Data R/W helper functions *************************************************/
-
-static void block_read_n(int block, char *mem, int n) {
-    int i;
-    for (i = 0; i < n; i++) {
-        block_read(block + i, mem + i*BLOCK_SIZE);
-    }
-}
-
-static void block_write_n(int block, char *mem, int n) {
-    int i;
-    for (i = 0; i < n; i++) {
-        block_write(block + i, mem + i*BLOCK_SIZE);
-    }
+static int ceil_div(int m, int n) {
+    return ((m - 1) / n) + 1;
 }
 
 static void str_copy(char *src, char *dest) {
-    bcopy((uint8_t *)src, (uint8_t *)dest, strlen(src));
+    bcopy((unsigned char *)src, (unsigned char *)dest, strlen(src));
 }
 
 static void str_append(char *src, char *dest) {
-    bcopy((uint8_t *)src, (uint8_t *)&dest[strlen(dest)], strlen(src));
+    bcopy(
+        (unsigned char *)src,
+        (unsigned char *)&dest[strlen(dest)],
+        strlen(src)
+    );
 }
 
 /* Super block ***************************************************************/
 
-static void superblock_init(void) {
-    bzero_block(super_buf);
+static sblock_t *sblock;
+
+static void sblock_init(sblock_t *sblock) {
+    int inode_blocks, bamap_blocks;
+
+    bzero_block(sblock_buf);
 
     sblock->magic_num = SUPER_MAGIC_NUM;
     sblock->fs_size = FS_SIZE;
 
     sblock->inode_start = SUPER_BLOCK + 1;
     sblock->inode_count = MAX_FILE_COUNT;
-    sblock->inode_blocks = CEIL_DIV(MAX_FILE_COUNT * INODE_SIZE, BLOCK_SIZE);
 
-    sblock->bamap_start = sblock->inode_start + sblock->inode_blocks;
-    sblock->bamap_blocks = CEIL_DIV(MAX_FILE_COUNT, BLOCK_SIZE);
+    inode_blocks = ceil_div(MAX_FILE_COUNT * sizeof(inode), BLOCK_SIZE);
+    sblock->bamap_start = sblock->inode_start + inode_blocks;
 
+    bamap_blocks = ceil_div(MAX_FILE_COUNT, BLOCK_SIZE);
     sblock->data_start = sblock->bamap_start + bamap_blocks;
     sblock->data_blocks = MAX_FILE_COUNT;
 }
 
-static void superblock_read(void) {
-    block_read(SUPER_BLOCK, super_buf);
+static sblock_t *sblock_read(void) {
+    block_read(SUPER_BLOCK, sblock_buf);
 }
 
-static void superblock_write(void) {
-    block_write(SUPER_BLOCK, super_buf);
+static void sblock_write(void) {
+    block_write(SUPER_BLOCK, sblock_buf);
 }
 
 /* i-Nodes *******************************************************************/
 
-static void inodes_init(void) {
-    bzero(inode_buf, sizeof(inode_buf));
-}
-
-static void inodes_read(void) {
-    block_read_n(superblock->inode_start, inode_buf, superblock->inode_blocks);
-}
-
-static void inodes_write(void) {
-    block_write_n(superblock->inode_start, inode_buf, superblock->inode_blocks);
-}
-
 static void inode_init(inode_t *inode, short type) {
     inode->type = type;
     inode->links = 0;
+    inode->fd_count = 0;
     inode->size = 0;
     bzero(inode->blocks, sizeof(inode->blocks)); // GRUMP sizeof struct field
 }
 
+static int inode_block(int index) {
+    int byte_offset, block_offset;
+    byte_offset = index * sizeof(inode_t);
+    block_offset = byte_offset / BLOCK_SIZE;
+    return sblock->inode_start + block_offset;
+}
+
+static inode_t *inode_read(int index) {
+    int block_index, inode_offset;
+    inode_t *inode;
+
+    block_index = inode_block(index);
+    block_read(block_index, inode_buf);
+    block_read(block_index + 1, &inode_buf[BLOCK_SIZE]); // GRUMP 2nd block
+
+    inode_offset = (index * sizeof(inode_t)) % BLOCK_SIZE;
+    inode = (inode_t *)&inode_buf[inode_offset];
+    return inode;
+}
+
+static void inode_write(int index) {
+    int block_index = inode_block(index);
+    block_write(block_index, inode_buf);
+    block_write(block_index + 1, &inode_buf[BLOCK_SIZE]); // GRUMP 2nd block
+}
+
 /* Block allocation map ******************************************************/
 
-static void ba_map_init(void) {
-    bzero(bamap_buf, sizeof(bamap_buf));
+static int bamap_block(int index) {
+    return sblock->bamap_start + (index / BLOCK_SIZE);
 }
 
-static void ba_map_read(void) {
-    block_read_n(superblock->bamap_start, bamap_buf, superblock->bamap_blocks);
+static uint8_t *bamap_read(int index) {
+    block_read(bamap_block(index), bamap_buf);
+    return (uint8_t *)&bamap_buf[index % BLOCK_SIZE];
 }
 
-static void ba_map_write(void) {
-    block_write_n(superblock->bamap_start, bamap_buf, superblock->bamap_blocks);
+static void bamap_write(int index) {
+    block_write(bamap_block(index), bamap_buf);
 }
 
 /* Working directory *********************************************************/
@@ -127,44 +138,37 @@ static void wdir_set_path(char *path) {
     str_copy(path, wdir.path);
 }
 
-static void wdir_path_append(char *dirname) {
+static void wdir_append_path(char *dirname) {
     str_append(dirname, wdir.path);
-    str_append(DIR_SEP, wdir.path);
+    str_append("/", wdir.path);
+}
+
+/* File descriptors **********************************************************/
+
+static fd_t fd_table[MAX_FILE_COUNT];
+
+static int fd_open_count = 0;
+
+static void fd_init(fd_t *fd) {
+    fd->is_open = FALSE;
 }
 
 /* File system operations ****************************************************/
 
 void fs_init(void) {
+    int i;
+
     block_init();
 
-    // Make data pointers refer to corresponding data buffers
-    superblock = (superblock_t *)super_buf;
-    inodes = (inode_t *)inode_buf;
-    ba_map = (uint8_t *)bamap_buf;
-
-    superblock_read();
+    // Read super block from disk
+    sblock = sblock_read();
 
     // Format disk if not already formatted
-    if (superblock->magic_num != SUPER_MAGIC_NUM) {
-        // Set up super block
-        superblock_init();
-        superblock_write();
-
-        // Initialize root directory
-        inodes_init();
-        inode_init(&inodes[ROOT_DIR]);
-        inodes_write();
-
-        // Allocate space for root directory in block alloc map
-        ba_map_init();
-        ba_map[ROOT_DIR] = TRUE;
-        ba_map_write();
-    }
-
-    // Otherwise, read inodes and block alloc map from disk
-    else {
-        inodes_read();
-        ba_map_read();
+    if (sblock->magic_num != SUPER_MAGIC_NUM) {
+        bzero_block(block_buf);
+        for (i = 0; i < FS_SIZE; i++) {
+            block_write(i, block_buf);
+        }
     }
 
     // Mount root as current working directory
@@ -174,7 +178,31 @@ void fs_init(void) {
 }
 
 int fs_mkfs(void) {
-    return -1;
+    int i;
+    inode_t *root_inode;
+    uint8_t *root_in_use;
+
+    // If just formatted, write necessary data to disk
+    if (sblock->magic_num != SUPER_MAGIC_NUM) {
+        // Write super block to disk
+        sblock_init(sblock);
+        sblock_write();
+
+        // Create inode for root directory
+        root_inode = inode_read(ROOT_DIR);
+        inode_init(root_inode, DIRECTORY);
+        inode_write(ROOT_DIR);
+
+        // Mark root directory data block as used
+        root_in_use = bamap_read(ROOT_DIR);
+        *root_in_use = TRUE;
+        bamap_write(ROOT_DIR);
+    }
+
+    // Initialize the file descriptor table
+    for (i = 0; i < MAX_FILE_COUNT; i++) {
+        fd_init(&fd_table[i]);
+    }
 }
 
 int fs_open(char *fileName, int flags) {
