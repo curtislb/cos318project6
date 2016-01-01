@@ -15,13 +15,6 @@
 #define ERROR_MSG(m)
 #endif
 
-/* Data buffers **************************************************************/
-
-static char sblock_buf[BLOCK_SIZE];
-static char inode_buf[2 * BLOCK_SIZE]; // inode may cross block boundary
-static char bamap_buf[BLOCK_SIZE];
-static char block_buf[BLOCK_SIZE]; // for additional data
-
 /* Static helper functions ***************************************************/
 
 static int ceil_div(int m, int n) {
@@ -42,24 +35,21 @@ static void str_append(char *src, char *dest) {
 
 /* Super block ***************************************************************/
 
+static char sblock_buf[BLOCK_SIZE];
+
 static sblock_t *sblock;
 
 static void sblock_init(sblock_t *sblock) {
-    int inode_blocks, bamap_blocks;
-
-    bzero_block(sblock_buf);
-
-    sblock->magic_num = SUPER_MAGIC_NUM;
     sblock->fs_size = FS_SIZE;
 
     sblock->inode_start = SUPER_BLOCK + 1;
     sblock->inode_count = MAX_FILE_COUNT;
-
-    inode_blocks = ceil_div(MAX_FILE_COUNT * sizeof(inode), BLOCK_SIZE);
-    sblock->bamap_start = sblock->inode_start + inode_blocks;
-
-    bamap_blocks = ceil_div(MAX_FILE_COUNT, BLOCK_SIZE);
-    sblock->data_start = sblock->bamap_start + bamap_blocks;
+    sblock->inode_blocks = ceil_div(MAX_FILE_COUNT*sizeof(inode), BLOCK_SIZE);
+    
+    sblock->bamap_start = sblock->inode_start + sblock->inode_blocks;
+    sblock->bamap_blocks = ceil_div(MAX_FILE_COUNT*sizeof(uint8_t), BLOCK_SIZE);
+    
+    sblock->data_start = sblock->bamap_start + sblock->bamap_blocks;
     sblock->data_blocks = MAX_FILE_COUNT;
 }
 
@@ -73,12 +63,19 @@ static void sblock_write(void) {
 
 /* i-Nodes *******************************************************************/
 
-static void inode_init(inode_t *inode, short type) {
+static char inode_buf[2 * BLOCK_SIZE]; // inode may cross block boundary
+
+static void inode_init(inode_t *inode, short type, short first_block) {
+    int i;
+
     inode->type = type;
     inode->links = 0;
     inode->fd_count = 0;
     inode->size = 0;
+
     bzero(inode->blocks, sizeof(inode->blocks)); // GRUMP sizeof struct field
+    inode->blocks[0] = first_block;
+    inode->used_blocks = 1;
 }
 
 static int inode_block(int index) {
@@ -109,6 +106,8 @@ static void inode_write(int index) {
 
 /* Block allocation map ******************************************************/
 
+static char bamap_buf[BLOCK_SIZE];
+
 static int bamap_block(int index) {
     return sblock->bamap_start + (index / BLOCK_SIZE);
 }
@@ -120,6 +119,29 @@ static uint8_t *bamap_read(int index) {
 
 static void bamap_write(int index) {
     block_write(bamap_block(index), bamap_buf);
+}
+
+static int block_alloc(void) {
+    int i, j;
+    char block_buf[BLOCK_SIZE];
+    for (i = 0; i < sblock->bamap_blocks; i++) {
+        block_read(sblock->bamap_start + i, block_buf);
+        for (j = 0; j < BLOCK_SIZE; j++) {
+            if (!block_buf[j]) {
+                block_buf[j] = TRUE;
+                block_write(sblock->bamap_start + i, block_buf);
+                return (i * BLOCK_SIZE) + j;
+            }
+        }
+    }
+    return FAILURE;
+}
+
+static void block_free(int index) {
+    uint8_t *in_use;
+    in_use = bamap_read(index);
+    *in_use = FALSE;
+    bamap_write(index);
 }
 
 /* Working directory *********************************************************/
@@ -145,7 +167,54 @@ static void wdir_append_path(char *dirname) {
 
 /* Directories ***************************************************************/
 
-// TODO: stuff
+static int dir_add_entry(int dir_inode, short entry_inode, char *name) {
+    int i, j;
+    inode_t *inode;
+    int block_entries, curr_entries;
+    char block_buf[BLOCK_SIZE];
+    entry_t *entries;
+    entry_t new_entry;
+    short new_block;
+
+    inode = inode_read(dir_inode);
+
+    block_entries = BLOCK_SIZE / sizeof(entry_t);
+    curr_entries = inode->size / sizeof(entry_t);
+    if (curr_entries >= block_entries * INODE_ADDRS) {
+        return FAILURE;
+    }
+
+    new_entry.inode = entry_inode;
+    str_copy(name, new_entry.name);
+
+    for (i = 0; i < inode->used_blocks; i++) {
+        block_read(inode->blocks[i], block_buf);
+        entries = (entry_t *)block_buf;
+        for (j = 0; j < block_entries; j++) {
+            if (!entries[j].in_use) {
+                entries[j] = new_entry;
+                block_write(inode->blocks[i], block_buf);
+
+                inode->size += sizeof(entry_t);
+                inode_write(dir_inode);
+                return SUCCESS;
+            }
+        }
+    }
+
+    new_block = block_alloc();
+    inode->blocks[used_blocks] = new_block;
+    inode->used_blocks++;
+
+    bzero_block(block_buf);
+    entries = (entry_t *)block_buf;
+    entries[0] = new_entry;
+    block_write(new_block, block_buf);
+
+    inode->size += sizeof(entry_t);
+    inode_write(dir_inode);
+    return SUCCESS;
+}
 
 /* File descriptor table *****************************************************/
 
@@ -154,57 +223,57 @@ static file_t fd_table[MAX_FILE_COUNT];
 static int fd_open_count;
 
 static void fd_init(int fd) {
-    fd_table[fd].is_open = FALSE;
+    file_t *file = &fd_table[fd];
+    file->is_open = FALSE;
 }
 
 /* File system operations ****************************************************/
 
 void fs_init(void) {
-    int i;
-
     block_init();
 
-    // Read super block from disk
-    sblock = sblock_read();
-
-    // Format disk if not already formatted
-    if (sblock->magic_num != SUPER_MAGIC_NUM) {
-        bzero_block(block_buf);
-        for (i = 0; i < FS_SIZE; i++) {
-            block_write(i, block_buf);
-        }
-    }
-
-    // Mount root as current working directory
-    wdir_set(ROOT_DIR);
-    wdir_set_name("");
-    wdir_set_path("/");
+    // TODO: wtf i don't even know, man
 }
 
 int fs_mkfs(void) {
     int i;
+    char block_buf[BLOCK_SIZE];
     inode_t *root_inode;
     uint8_t *root_in_use;
 
-    // If just formatted, write necessary data to disk
+    // Format disk if necessary
     sblock = sblock_read();
     if (sblock->magic_num != SUPER_MAGIC_NUM) {
+        // Zero out all file system blocks
+        bzero_block(block_buf);
+        for (i = 0; i < FS_SIZE; i++) {
+            block_write(i, block_buf);
+        }
+
         // Write super block to disk
+        bzero_block((char *)sblock);
         sblock_init(sblock);
         sblock_write();
 
         // Create inode for root directory
         root_inode = inode_read(ROOT_DIR);
-        inode_init(root_inode, DIRECTORY);
+        inode_init(root_inode, DIRECTORY, sblock->data_start);
         inode_write(ROOT_DIR);
 
         // Mark root directory data block as used
         root_in_use = bamap_read(ROOT_DIR);
         *root_in_use = TRUE;
         bamap_write(ROOT_DIR);
+
+        // Set up root directory with '.' and '..' entries
+        dir_add_entry(ROOT_INODE, ROOT_INODE, ".");
+        dir_add_entry(ROOT_INODE, ROOT_INODE, "..");
     }
 
-    // TODO: Initialize root directory
+    // Mount root as current working directory
+    wdir_set(ROOT_DIR);
+    wdir_set_name("");
+    wdir_set_path("/");
 
     // Initialize the file descriptor table
     fd_open_count = 0;
@@ -238,6 +307,12 @@ int fs_mkdir(char *fileName) {
 }
 
 int fs_rmdir(char *fileName) {
+    if (same_string(fileName, ".") || same_string(fileName, "..")) {
+        return FAILURE;
+    }
+
+    // TODO: more stuff
+
     return -1;
 }
 

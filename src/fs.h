@@ -25,7 +25,11 @@ int fs_stat(char *fileName, fileStat *buf);
 #define MAX_FILE_NAME 32
 #define MAX_PATH_NAME 256 /* This is the maximum supported "full" path len,
     eg: /foo/bar/test.txt, rather than the maximum individual filename len. */
+
 #define MAX_FILE_COUNT 1000
+
+#define SUCCESS 0
+#define FAILURE -1
 
 /* Super block ***************************************************************/
 
@@ -38,8 +42,10 @@ typedef struct {
 
     int inode_start; // First block where inodes are stored
     int inode_count; // Number of inodes that can be allocated
+    int inode_blocks; // Number of blocks set aside for inodes
 
     int bamap_start; // First block of block allocation map
+    int bamap_blocks; // Number of blocks set aside for block alloc map
 
     int data_start; // First data block
     int data_blocks; // Number of data blocks that can be allocated
@@ -55,6 +61,7 @@ typedef struct {
     char fd_count; // number of open file descriptors
     int size; // file size in bytes
     short blocks[INODE_ADDRS]; // file data blocks
+    uint8_t block_used[INODE_ADDRS]; // map of in-use block addresses
 } inode_t;
 
 /* Files and directories *****************************************************/
@@ -63,21 +70,22 @@ typedef struct {
 
 // Working directory
 typedef struct {
-    int inode;
+    short inode;
     char name[MAX_FILE_NAME];
     char path[MAX_PATH_NAME];
 } wdir_t;
 
 // Directory entry
 typedef struct {
-    int inode;
+    uint8_t in_use;
+    short inode;
     char name[MAX_FILE_NAME];
 } entry_t;
 
 // File descriptor table entry
 typedef struct {
-    bool_t is_open;
-    int inode;
+    uint8_t is_open;
+    short inode;
     short mode;
     int cursor;
 } file_t;
