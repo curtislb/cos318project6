@@ -38,6 +38,7 @@ int fs_stat(char *fileName, fileStat *buf);
 
 typedef struct {
     int magic_num; // Indicates that disk is formatted
+
     int fs_size; // Size of file system in blocks
 
     int inode_start; // First block where inodes are stored
@@ -58,10 +59,10 @@ typedef struct {
 typedef struct {
     short type; // the file type (DIRECTORY, FILE_TYPE)
     char links; // number of links to the i-node
-    char fd_count; // number of open file descriptors
+    short fd_count; // number of open file descriptors
     int size; // file size in bytes
     short blocks[INODE_ADDRS]; // file data blocks
-    uint8_t block_used[INODE_ADDRS]; // map of in-use block addresses
+    short used_blocks; // number of in-use data blocks
 } inode_t;
 
 /* Files and directories *****************************************************/
@@ -86,7 +87,7 @@ typedef struct {
 typedef struct {
     uint8_t is_open;
     short inode;
-    short mode;
+    int mode;
     int cursor;
 } file_t;
 
