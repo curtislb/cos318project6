@@ -116,18 +116,25 @@ static int block_free(int index) {
     return SUCCESS;
 }
 
+/* Data blocks ***************************************************************/
+
+static void data_read(int index, char *block_buf) {
+    block_read(sblock->data_start + index, block_buf);
+}
+
+static void data_write(int index, char *block_buf) {
+    block_write(sblock->data_start + index, block_buf);
+}
+
 /* i-Nodes *******************************************************************/
 
-static void inode_init(inode_t *inode, int type, int first_block) {
+static void inode_init(inode_t *inode, int type) {
     inode->type = type;
     inode->links = 0;
     inode->fd_count = 0;
     inode->size = 0;
-
-    // Set up first block address
     bzero(inode->blocks, sizeof(inode->blocks)); // GRUMP sizeof struct field
-    inode->blocks[0] = first_block;
-    inode->used_blocks = 1;
+    inode->used_blocks = 0;
 }
 
 static inode_t *inode_read(int index, char *block_buf) {
@@ -168,14 +175,8 @@ static int inode_create(int type) {
         inodes = (inode_t *)block_buf;
         for (j = 0; j < block_inodes; j++) {
             if (inodes[j].type == FREE_INODE) {
-                // Try to allocate a new data block
-                new_block = block_alloc();
-                if (block == FAILURE) {
-                    return FAILURE;
-                }
-
                 // Write the new inode to disk
-                inode_init(&inodes[j], type, new_block);
+                inode_init(&inodes[j], type);
                 block_write(sblock->inode_start + i, block_buf);
 
                 // Return index of newly created inode
@@ -187,30 +188,26 @@ static int inode_create(int type) {
     return FAILURE;
 }
 
-// static int inode_free(int index) {
-//     int i;
-//     int result;
-//     inode_t *inode;
+static int inode_free(inode_t *inode) {
+    int i;
+    int result;
 
-//     // Read inode from disk, fail if already free
-//     inode = inode_read(index);
-//     if (inode->type == FREE_INODE) {
-//         return FAILURE;
-//     }
+    // Fail if inode is already free
+    if (inode->type == FREE_INODE) {
+        return FAILURE;
+    }
 
-//     for (i = 0; i < inode->used_blocks; i++) {
-//         result = block_free(inode->blocks[i]);
-//         if (result == FAILURE) {
-//             return FAILURE;
-//         }
-//     }
+    // Free all data blocks used by inode
+    for (i = 0; i < inode->used_blocks; i++) {
+        result = block_free(inode->blocks[i]);
+        ASSERT(result != FAILURE);
+    }
 
-//     // Mark inode as free on disk
-//     inode->type = FREE_INODE;
-//     inode_write(index);
+    // Mark inode as free on disk
+    inode->type = FREE_INODE;
 
-//     return SUCCESS;
-// }
+    return SUCCESS;
+}
 
 /* Directories ***************************************************************/
 
@@ -270,7 +267,7 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
     bzero_block(block_buf);
     entries = (entry_t *)block_buf;
     entries[0] = new_entry;
-    block_write(new_block, block_buf);
+    data_write(new_block, block_buf);
 
     // Write changes to inode on disk
     inode->size += sizeof(entry_t);
@@ -292,7 +289,7 @@ static int dir_find_entry(int dir_inode, char *name) {
     // Search for matching entry in used blocks
     block_entries = BLOCK_SIZE / sizeof(entry_t);
     for (i = 0; i < inode->used_blocks; i++) {
-        block_read(inode->blocks[i], block_buf);
+        data_read(inode->blocks[i], block_buf);
         entries = (entry_t *)block_buf;
         for (j = 0; j < block_entries; j++) {
             // If entry matches, return its inode number
@@ -314,10 +311,6 @@ static void wdir_set(int inode) {
     wdir.inode = inode;
 }
 
-static void wdir_set_name(char *name) {
-    str_copy(name, wdir.name);
-}
-
 static void wdir_set_path(char *path) {
     str_copy(path, wdir.path);
 }
@@ -325,6 +318,27 @@ static void wdir_set_path(char *path) {
 static void wdir_append_path(char *dirname) {
     str_append(dirname, wdir.path);
     str_append("/", wdir.path);
+}
+
+static void wdir_truncate_path(void) {
+    int i;
+    int path_len;
+
+    // Cannot truncate path from root directory
+    path_len = strlen(wdir.path);
+    ASSERT(path_len > 0);
+    ASSERT(path_len <= MAX_PATH_NAME);
+    if (path_len == 1) {
+        return;
+    }
+
+    // Terminate string after penultimate '/'
+    for (i = strlen(wdir.path) - 2; i >= 0; i--) {
+        if (wdir.path[i] == '/') {
+            wdir.path[i + 1] = '\0';
+            return;
+        }
+    }
 }
 
 /* File descriptor table *****************************************************/
@@ -397,7 +411,9 @@ int fs_mkfs(void) {
 
         // Create inode for root directory
         inode = inode_read(ROOT_DIR, block_buf);
-        inode_init(inode, DIRECTORY, sblock->data_start);
+        inode_init(inode, DIRECTORY);
+        inode->blocks[0] = ROOT_DIR;
+        inode->used_blocks = 1;
         inode_write(ROOT_DIR, block_buf);
 
         // Mark root directory data block as used
@@ -412,7 +428,6 @@ int fs_mkfs(void) {
 
     // Mount root as current working directory
     wdir_set(ROOT_DIR);
-    wdir_set_name("");
     wdir_set_path("/");
 
     // Initialize the file descriptor table
@@ -489,7 +504,8 @@ int fs_close(int fd) {
     }
 
     // Read corresponding inode from disk
-    inode = inode_read(fd_table[fd].inode, block_buf);
+    inode_index = fd_table[fd].inode;
+    inode = inode_read(inode_index, block_buf);
     ASSERT(inode->type == FILE_TYPE);
     ASSERT(inode->fd_count > 0);
 
@@ -502,14 +518,8 @@ int fs_close(int fd) {
     // Decrement open fd count of inode, free inode if necessary
     inode->fd_count--;
     if (inode->links == 0 && inode->fd_count == 0) {
-        // Free all data blocks used by inode
-        for (i = 0; i < inode->used_blocks; i++) {
-            result = block_free(inode->blocks[i]);
-            ASSERT(result != FAILURE);
-        }
-
-        // Mark inode as free on disk
-        inode->type = FREE_INODE;
+        result = inode_free(inode);
+        ASSERT(result != FAILURE);
     }
     inode_write(inode_index, block_buf);
 
@@ -517,15 +527,115 @@ int fs_close(int fd) {
 }
 
 int fs_read(int fd, char *buf, int count) {
-    return -1;
+    int i;
+    file_t *file;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
+    char data_buf[BLOCK_SIZE];
+    int avail_bytes;
+    int index_start;
+    int bytes_read;
+    int block_offset;
+    int block_bytes;
+    int to_read;
+
+    // Cannot read from file if fd entry not open
+    file = &fd_table[fd];
+    if (!file->is_open) {
+        return FAILURE;
+    }
+
+    // Cannot read from file if opened write-only
+    if (file->mode == FS_O_WRONLY) {
+        return FAILURE;
+    }
+
+    // Read file inode from disk
+    inode = inode_read(file->inode, inode_buf);
+    ASSERT(inode->type == FILE_TYPE);
+
+    // Read no more than remaining bytes in file
+    avail_bytes = file->size - file->cursor;
+    if (count > avail_bytes) {
+        count = avail_bytes;
+    }
+
+    // Read count bytes from file data blocks
+    index_start = file->cursor / BLOCK_SIZE;
+    bytes_read = 0;
+    for (i = index_start; bytes_read < count; i++) {
+        // Read file data block from disk
+        data_read(file->blocks[i], data_buf);
+
+        // Determine offset and number of bytes in current block
+        block_offset = file->cursor % block_size;
+        block_bytes = BLOCK_SIZE - block_offset;
+
+        // Bytes to read is min of (count - bytes_read) and block_bytes
+        if (count - bytes_read < block_bytes) {
+            to_read = count - bytes_read;
+        } else {
+            to_read = block_bytes;
+        }
+
+        // Read bytes to buffer, update cursor and byte count
+        bcopy(&data_buf[block_offset], &buf[bytes_read], to_read);
+        file->cursor += to_read;
+        bytes_read += to_read;
+    }
+
+    return bytes_read;
 }
     
 int fs_write(int fd, char *buf, int count) {
-    return -1;
+    int i;
+    file_t *file;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
+    char data_buf[BLOCK_SIZE];
+    int index_start;
+    int bytes_written;
+    int block_offset;
+    int block_bytes;
+    int to_write;
+
+    // Cannot write to file if fd entry not open
+    file = &fd_table[fd];
+    if (!file->is_open) {
+        return FAILURE;
+    }
+
+    // Cannot read from file if opened read-only
+    if (file->mode == FS_O_RDONLY) {
+        return FAILURE;
+    }
+
+    // Read file inode from disk
+    inode = inode_read(file->inode, inode_buf);
+    ASSERT(inode->type == FILE_TYPE);
+
+    // TODO: similar to fs_read
+    
+    // Fail if no bytes written with nonzero count
+    if (bytes_written == 0 && count > 0) {
+        return FAILURE;
+    }
+
+    return bytes_written;
 }
 
 int fs_lseek(int fd, int offset) {
-    return -1;
+    file_t *file;
+
+    // Cannot set cursor if fd entry not open
+    file = &fd_table[fd];
+    if (!file->is_open) {
+        return FAILURE;
+    }
+
+    // Set the cursor position and return it
+    file->cursor = offset;
+    return offset;
 }
 
 int fs_mkdir(char *fileName) {

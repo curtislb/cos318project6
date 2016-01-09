@@ -72,15 +72,14 @@ typedef struct {
 // Working directory
 typedef struct {
     short inode;
-    char name[MAX_FILE_NAME];
-    char path[MAX_PATH_NAME];
+    char path[MAX_PATH_NAME + 1];
 } wdir_t;
 
 // Directory entry
 typedef struct {
     uint8_t in_use;
     short inode;
-    char name[MAX_FILE_NAME];
+    char name[MAX_FILE_NAME + 1];
 } entry_t;
 
 // File descriptor table entry
