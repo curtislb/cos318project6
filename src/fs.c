@@ -35,9 +35,8 @@ static void str_append(char *src, char *dest) {
 
 /* Super block ***************************************************************/
 
-static char sblock_buf[BLOCK_SIZE];
-
 static sblock_t *sblock;
+static char sblock_buf[BLOCK_SIZE];
 
 static void sblock_init(sblock_t *sblock) {
     sblock->fs_size = FS_SIZE;
@@ -53,29 +52,28 @@ static void sblock_init(sblock_t *sblock) {
     sblock->data_blocks = MAX_FILE_COUNT;
 }
 
-static sblock_t *sblock_read(void) {
-    block_read(SUPER_BLOCK, sblock_buf);
+static sblock_t *sblock_read(char *block_buf) {
+    block_read(SUPER_BLOCK, block_buf);
+    return (sblock_t *)block_buf;
 }
 
-static void sblock_write(void) {
-    block_write(SUPER_BLOCK, sblock_buf);
+static void sblock_write(char *block_buf) {
+    block_write(SUPER_BLOCK, block_buf);
 }
 
 /* Block allocation map ******************************************************/
-
-static char bamap_buf[BLOCK_SIZE];
 
 static int bamap_block(int index) {
     return sblock->bamap_start + (index * sizeof(uint8_t) / BLOCK_SIZE);
 }
 
-static uint8_t *bamap_read(int index) {
-    block_read(bamap_block(index), bamap_buf);
-    return (uint8_t *)&bamap_buf[index % BLOCK_SIZE];
+static uint8_t *bamap_read(int index, char *block_buf) {
+    block_read(bamap_block(index), block_buf);
+    return (uint8_t *)&block_buf[index % BLOCK_SIZE];
 }
 
-static void bamap_write(int index) {
-    block_write(bamap_block(index), bamap_buf);
+static void bamap_write(int index, char *block_buf) {
+    block_write(bamap_block(index), block_buf);
 }
 
 static int block_alloc(void) {
@@ -103,23 +101,22 @@ static int block_alloc(void) {
 
 static int block_free(int index) {
     uint8_t *in_use;
+    char block_buf[BLOCK_SIZE];
 
     // Read block usage flag, fail if not in use
-    in_use = bamap_read(index);
+    in_use = bamap_read(index, block_buf);
     if (!(*in_use)) {
         return FAILURE;
     }
 
     // Mark block as free on disk
     *in_use = FALSE;
-    bamap_write(index);
+    bamap_write(index, block_buf);
 
     return SUCCESS;
 }
 
 /* i-Nodes *******************************************************************/
-
-static char inode_buf[BLOCK_SIZE];
 
 static void inode_init(inode_t *inode, int type, int first_block) {
     inode->type = type;
@@ -133,7 +130,7 @@ static void inode_init(inode_t *inode, int type, int first_block) {
     inode->used_blocks = 1;
 }
 
-static inode_t *inode_read(int index) {
+static inode_t *inode_read(int index, char *block_buf) {
     int block_inodes;
     int block_offset;
     int block_index;
@@ -143,18 +140,18 @@ static inode_t *inode_read(int index) {
     block_inodes = BLOCK_SIZE / sizeof(inode_t);
     block_offset = index / block_inodes;
     block_index = sblock->inode_start + block_offset;
-    block_read(block_index, inode_buf);
+    block_read(block_index, block_buf);
 
     // Return pointer to inode struct in data buffer
-    inodes = (inode_t *)inode_buf;
+    inodes = (inode_t *)block_buf;
     return &inodes[index % block_inodes];
 }
 
-static void inode_write(int index) {
+static void inode_write(int index, char *block_buf) {
     int block_inodes = BLOCK_SIZE / sizeof(inode_t);
     int block_offset = index / block_inodes;
     int block_index = sblock->inode_start + block_offset;
-    block_write(block_index, inode_buf);
+    block_write(block_index, block_buf);
 }
 
 static int inode_create(int type) {
@@ -385,7 +382,7 @@ int fs_mkfs(void) {
     uint8_t *in_use;
 
     // Format disk if necessary
-    sblock = sblock_read();
+    sblock = sblock_read(sblock_buf);
     if (sblock->magic_num != SUPER_MAGIC_NUM) {
         // Zero out all file system blocks
         bzero_block(block_buf);
@@ -394,19 +391,19 @@ int fs_mkfs(void) {
         }
 
         // Write super block to disk
-        bzero_block((char *)sblock);
+        bzero_block(sblock_buf);
         sblock_init(sblock);
-        sblock_write();
+        sblock_write(sblock_buf);
 
         // Create inode for root directory
-        inode = inode_read(ROOT_DIR);
+        inode = inode_read(ROOT_DIR, block_buf);
         inode_init(inode, DIRECTORY, sblock->data_start);
-        inode_write(ROOT_DIR);
+        inode_write(ROOT_DIR, block_buf);
 
         // Mark root directory data block as used
-        in_use = bamap_read(ROOT_DIR);
+        in_use = bamap_read(ROOT_DIR, block_buf);
         *in_use = TRUE;
-        bamap_write(ROOT_DIR);
+        bamap_write(ROOT_DIR, block_buf);
 
         // Set up root directory with '.' and '..' entries
         dir_add_entry(ROOT_INODE, ROOT_INODE, ".");
@@ -429,6 +426,7 @@ int fs_mkfs(void) {
 int fs_open(char *fileName, int flags) {
     int entry_inode;
     int result;
+    char block_buf[BLOCK_SIZE];
     int fd;
 
     // Search for entry in working directory
@@ -455,7 +453,7 @@ int fs_open(char *fileName, int flags) {
     }
     
     // Read inode, and fail if not a file
-    inode = inode_read(entry_inode);
+    inode = inode_read(entry_inode, block_buf);
     if (inode->type != FILE_TYPE) {
         return FAILURE;
     }
@@ -468,7 +466,7 @@ int fs_open(char *fileName, int flags) {
 
     // Increment open fd count for inode
     inode->fd_count++;
-    inode_write(file_inode);
+    inode_write(file_inode, block_buf);
 
     return fd;
 }
@@ -477,6 +475,7 @@ int fs_close(int fd) {
     int i;
     int inode_index;
     inode_t *inode;
+    char block_buf[BLOCK_SIZE];
     int result;
 
     // Fail if given bad file descriptor
@@ -490,7 +489,7 @@ int fs_close(int fd) {
     }
 
     // Read corresponding inode from disk
-    inode = inode_read(fd_table[fd].inode);
+    inode = inode_read(fd_table[fd].inode, block_buf);
     ASSERT(inode->type == FILE_TYPE);
     ASSERT(inode->fd_count > 0);
 
@@ -506,15 +505,13 @@ int fs_close(int fd) {
         // Free all data blocks used by inode
         for (i = 0; i < inode->used_blocks; i++) {
             result = block_free(inode->blocks[i]);
-            if (result == FAILURE) {
-                return FAILURE;
-            }
+            ASSERT(result != FAILURE);
         }
 
         // Mark inode as free on disk
         inode->type = FREE_INODE;
     }
-    inode_write(inode_index);
+    inode_write(inode_index, block_buf);
 
     return SUCCESS;
 }
