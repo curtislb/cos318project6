@@ -705,21 +705,86 @@ int fs_lseek(int fd, int offset) {
 }
 
 int fs_mkdir(char *fileName) {
-    return -1;
+    int inode_index;
+    int result;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
+
+    // Fail if directory already exists
+    if (dir_find_entry(wdir.inode, fileName) != FAILURE) {
+        return FAILURE;
+    }
+
+    // Create inode for new directory if possible
+    inode_index = inode_create(DIRECTORY);
+    if (inode_index == FAILURE) {
+        return FAILURE;
+    }
+
+    // Add self link to new directory
+    result = dir_add_entry(inode_index, inode_index, ".");
+    if (result == FAILURE) {
+        inode_free(inode_index);
+        return FAILURE;
+    }
+
+    // Add parent link to new directory
+    result = dir_add_entry(inode_index, wdir.inode, "..");
+    if (result == FAILURE) {
+        inode_free(inode_index);
+        return FAILURE;
+    }
+
+    // Link to new directory from working directory
+    result = dir_add_entry(wdir.inode, inode_index, fileName);
+    if (result == FAILURE) {
+        inode_free(inode_index);
+        return FAILURE;
+    }
+
+    return SUCCESS;
 }
 
 int fs_rmdir(char *fileName) {
+    int inode_index;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
+    int result;
+
+    // Cannot remove self or parent meta-entries
     if (same_string(fileName, ".") || same_string(fileName, "..")) {
         return FAILURE;
     }
 
-    // TODO: more stuff
+    // Attempt to find entry in working directory
+    inode_index = dir_find_entry(wdir.inode, fileName);
+    if (inode_index == FAILURE) {
+        return FAILURE;
+    }
 
-    return -1;
+    // Fail if entry is not a directory
+    inode = inode_read(inode_index, inode_buf);
+    if (inode->type != DIRECTORY) {
+        return FAILURE;
+    }
+
+    // Free directory inode on disk
+    result = inode_free(inode_index);
+    ASSERT(result != FAILURE);
+
+    // Remove entry from working directory
+    result = dir_remove_entry(wdir.inode, fileName);
+    ASSERT(result != FAILURE);
+
+    return SUCCESS;
 }
 
 int fs_cd(char *dirName) {
-    return -1;
+    if (same_string(dirName, ".")) {
+        return SUCCESS;
+    }
+
+    // TODO: more stuff
 }
 
 int fs_link(char *old_fileName, char *new_fileName) {
