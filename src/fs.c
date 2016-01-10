@@ -224,14 +224,16 @@ static void entry_init(entry_t *entry, int inode, char *name) {
 static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
     int i, j;
     inode_t *inode;
-    int block_entries, curr_entries;
-    char block_buf[BLOCK_SIZE];
+    char inode_buf[BLOCK_SIZE];
+    char data_buf[BLOCK_SIZE];
+    int block_entries;
+    int curr_entries;
     entry_t *entries;
     entry_t new_entry;
     int new_block;
 
     // Read directory inode from disk
-    inode = inode_read(dir_inode);
+    inode = inode_read(dir_inode, inode_buf);
 
     // Fail if too many entries in directory
     block_entries = BLOCK_SIZE / sizeof(entry_t);
@@ -245,13 +247,13 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
 
     // Search for free entry in used blocks
     for (i = 0; i < inode->used_blocks; i++) {
-        block_read(inode->blocks[i], block_buf);
-        entries = (entry_t *)block_buf;
+        data_read(inode->blocks[i], data_buf);
+        entries = (entry_t *)data_buf;
         for (j = 0; j < block_entries; j++) {
             if (!entries[j].in_use) {
                 // Add new entry to directory
                 entries[j] = new_entry;
-                block_write(inode->blocks[i], block_buf);
+                data_write(inode->blocks[i], data_buf);
 
                 // Write changes to inode on disk
                 inode->size += sizeof(entry_t);
@@ -280,21 +282,52 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
     return SUCCESS;
 }
 
-static int dir_find_entry(int dir_inode, char *name) {
+static int dir_remove_entry(int dir_inode, char *name) {
     int i, j;
     inode_t *inode;
-    int block_entries;
-    char block_buf[BLOCK_SIZE];
+    char inode_buf[BLOCK_SIZE];
+    char data_buf[BLOCK_SIZE];
     entry_t *entries;
 
     // Read directory inode from disk
-    inode = inode_read(dir_inode);
+    inode = inode_read(dir_inode, inode_buf);
 
     // Search for matching entry in used blocks
     block_entries = BLOCK_SIZE / sizeof(entry_t);
     for (i = 0; i < inode->used_blocks; i++) {
-        data_read(inode->blocks[i], block_buf);
-        entries = (entry_t *)block_buf;
+        data_read(inode->blocks[i], data_buf);
+        entries = (entry_t *)data_buf;
+        for (j = 0; j < block_entries; j++) {
+            if (entries[j].in_use && same_string(entries[j].name, name)) {
+                // Mark entry as free on disk
+                entries[j].in_use = (uint8_t)FALSE;
+                data_write(inode->blocks[i], data_buf);
+
+                return SUCCESS;
+            }
+        }
+    }
+
+    // No matching entry found
+    return FAILURE;
+}
+
+static int dir_find_entry(int dir_inode, char *name) {
+    int i, j;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
+    char data_buf[BLOCK_SIZE];
+    int block_entries;
+    entry_t *entries;
+
+    // Read directory inode from disk
+    inode = inode_read(dir_inode, inode_buf);
+
+    // Search for matching entry in used blocks
+    block_entries = BLOCK_SIZE / sizeof(entry_t);
+    for (i = 0; i < inode->used_blocks; i++) {
+        data_read(inode->blocks[i], data_buf);
+        entries = (entry_t *)data_buf;
         for (j = 0; j < block_entries; j++) {
             // If entry matches, return its inode number
             if (entries[j].in_use && same_string(entries[j].name, name)) {
