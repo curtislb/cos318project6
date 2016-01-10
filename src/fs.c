@@ -344,10 +344,6 @@ static int dir_find_entry(int dir_inode, char *name) {
 
 static wdir_t wdir;
 
-static void wdir_set(int inode) {
-    wdir.inode = inode;
-}
-
 static void wdir_set_path(char *path) {
     str_copy(path, wdir.path);
 }
@@ -464,7 +460,7 @@ int fs_mkfs(void) {
     }
 
     // Mount root as current working directory
-    wdir_set(ROOT_DIR);
+    wdir.inode = ROOT_DIR;
     wdir_set_path("/");
 
     // Initialize the file descriptor table
@@ -813,11 +809,37 @@ int fs_rmdir(char *fileName) {
 }
 
 int fs_cd(char *dirName) {
+    int inode_index;
+
+    // Don't change directory if attempting to cd to "."
     if (same_string(dirName, ".")) {
         return SUCCESS;
     }
 
-    // TODO: more stuff
+    // Move to parent directory if attempting to cd to ".."
+    if (same_string(dirName, "..")) {
+        // Find inode of parent directory
+        inode_index = dir_find_entry(wdir.inode, "..");
+        ASSERT(inode_index != FAILURE);
+
+        // Set working directory to parent and update path
+        wdir.inode = inode_index;
+        wdir_truncate_path();
+
+        return SUCCESS;
+    }
+
+    // Attempt to find entry in working directory
+    inode_index = dir_find_entry(wdir.inode, dirName);
+    if (inode_index == FAILURE) {
+        return FAILURE;
+    }
+
+    // Set working directory to child and update path
+    wdir.inode = inode_index;
+    wdir_append_path(dirName);
+
+    return SUCCESS;
 }
 
 int fs_link(char *old_fileName, char *new_fileName) {
