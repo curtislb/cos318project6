@@ -21,6 +21,10 @@ static int ceil_div(int m, int n) {
     return ((m - 1) / n) + 1;
 }
 
+static int min(int x, int y) {
+    return (x < y) ? x : y;
+}
+
 static void str_copy(char *src, char *dest) {
     bcopy((unsigned char *)src, (unsigned char *)dest, strlen(src));
 }
@@ -555,31 +559,31 @@ int fs_read(int fd, char *buf, int count) {
     ASSERT(inode->type == FILE_TYPE);
 
     // Read no more than remaining bytes in file
-    avail_bytes = file->size - file->cursor;
+    avail_bytes = inode->size - file->cursor;
     if (count > avail_bytes) {
         count = avail_bytes;
     }
 
-    // Read count bytes from file data blocks
-    index_start = file->cursor / BLOCK_SIZE;
+    // Read count bytes from file blocks to buffer
     bytes_read = 0;
-    for (i = index_start; bytes_read < count; i++) {
+    index_start = file->cursor / BLOCK_SIZE;
+    for (i = index_start; bytes_read < count && i < INODE_ADDRS; i++) {
         // Read file data block from disk
-        data_read(file->blocks[i], data_buf);
+        data_read(inode->blocks[i], data_buf);
 
-        // Determine offset and number of bytes in current block
-        block_offset = file->cursor % block_size;
+        // Determine offset and bytes to read in block
+        block_offset = file->cursor % BLOCK_SIZE;
         block_bytes = BLOCK_SIZE - block_offset;
+        to_read = min(count - bytes_read, block_bytes);
 
-        // Bytes to read is min of (count - bytes_read) and block_bytes
-        if (count - bytes_read < block_bytes) {
-            to_read = count - bytes_read;
-        } else {
-            to_read = block_bytes;
-        }
+        // Read bytes from data block to buffer
+        bcopy(
+            (unsigned char *)&data_buf[block_offset],
+            (unsigned char *)&buf[bytes_read],
+            to_read
+        );
 
-        // Read bytes to buffer, update cursor and byte count
-        bcopy(&data_buf[block_offset], &buf[bytes_read], to_read);
+        // Update cursor and byte count
         file->cursor += to_read;
         bytes_read += to_read;
     }
@@ -605,8 +609,18 @@ int fs_write(int fd, char *buf, int count) {
         return FAILURE;
     }
 
-    // Cannot read from file if opened read-only
+    // Cannot write to file if opened read-only
     if (file->mode == FS_O_RDONLY) {
+        return FAILURE;
+    }
+
+    // If writing no bytes, return 0 immediately
+    if (count == 0) {
+        return 0;
+    }
+
+    // Cannot write beyond end of last data block
+    if (file->cursor >= INODE_ADDRS * BLOCK_SIZE) {
         return FAILURE;
     }
 
@@ -614,12 +628,64 @@ int fs_write(int fd, char *buf, int count) {
     inode = inode_read(file->inode, inode_buf);
     ASSERT(inode->type == FILE_TYPE);
 
-    // TODO: similar to fs_read
-    
-    // Fail if no bytes written with nonzero count
-    if (bytes_written == 0 && count > 0) {
-        return FAILURE;
+    // If cursor after end of file, pad with zeros up to cursor
+    index_start = inode->size / BLOCK_SIZE;
+    for (i = index_start; inode->size < file->cursor; i++) {
+        // Allocate new data block if necessary
+        if (i >= inode->used_blocks) {
+            inode->blocks[i] = block_alloc();
+            inode->used_blocks++;
+        }
+
+        // Read file data block from disk
+        data_read(inode->blocks[i], data_buf);
+
+        // Determine offset and bytes to write in block
+        block_offset = file->size % BLOCK_SIZE;
+        block_bytes = BLOCK_SIZE - block_offset;
+        to_write = min(file->cursor - file->size, block_bytes);
+
+        // Write zero padding bytes to block on disk
+        bzero(&data_buf[block_offset], to_write);
+        data_write(inode->blocks[i], data_buf);
+
+        // Update file size
+        inode->size += to_write;
     }
+
+    // Write count bytes from buffer to file blocks on disk
+    bytes_written = 0;
+    index_start = file->cursor / BLOCK_SIZE;
+    for (i = index_start; bytes_written < count && i < INODE_ADDRS; i++) {
+        // Allocate new data block if necessary
+        if (i >= inode->used_blocks) {
+            inode->blocks[i] = block_alloc();
+            inode->used_blocks++;
+        }
+
+        // Read file data block from disk
+        data_read(inode->blocks[i], data_buf);
+
+        // Determine offset and bytes to write in block
+        block_offset = file->cursor % BLOCK_SIZE;
+        block_bytes = BLOCK_SIZE - block_offset;
+        to_write = min(count - bytes_written, block_bytes);
+
+        // Write bytes to data block on disk
+        bcopy(
+            (unsigned char *)&buf[bytes_written],
+            (unsigned char *)&data_buf[block_offset],
+            to_write
+        );
+        data_write(inode->blocks[i], data_buf);
+
+        // Update cursor and byte count
+        file->cursor += to_write;
+        bytes_written += to_write;
+    }
+
+    // Write updated inode to disk
+    inode_write(file->inode, inode_buf);
 
     return bytes_written;
 }
