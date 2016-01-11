@@ -259,30 +259,57 @@ static void shell_cd( void) {
 }
 
 static void shell_ls( void) {
-    //should a system call print to the screen?
-  writeStr("Problem with ls\n");
+    int i, j;
+    char fileName[MAX_FILE_NAME + 1];
+    fileStat status;
+    char s[10];
 
-//Code/pseudocode you can use somewhere to get the same ls output as the tests
-//  writeStr("Name");
-//  print MAX_FILE_NAME - 3 spaces
-//  writeStr("Type");
-//  print 1 space
-//  writeStr("Inode");
-//  print 1 space
-//  writeStr("Size\n");
+    i = 0;
+    if (fs_ls_one(i, fileName) != -1) {
+        // Print column headers
+        writeStr("Name");
+        for (j = 0; j < MAX_FILE_NAME - 3; j++) {
+            writeStr(" ");
+        }
+        writeStr("Type");
+        writeStr(" ");
+        writeStr("Inode");
+        writeStr(" ");
+        writeStr("Size\n");
 
+        // Repeat for all valid directory entries
+        do {
+            // Read stat info for file
+            if (fs_stat(fileName, &status) == -1) {
+                writeStr("Problem with ls\n");
+                return;
+            }
 
-//  writeStr(/*file name*/);
-//  print MAX_FILE_NAME - size of file name + 1 spaces
-//
-//  writeStr(/*condition*/ ? "D" : "F");
-//  print 4 spaces
-//
-//  writeInt(/*inode #*/);
-//  print 5 spaces
-//
-//  writeInt(/*file size*/);
-//  writeStr("\n");
+            // Print file name
+            writeStr(fileName);
+            for (j = 0; j < MAX_FILE_NAME - strlen(fileName) + 1; j++) {
+                writeStr(" ");
+            }
+            
+            // Print abbreviated file type
+            writeStr(status.type == DIRECTORY ? "D" : "F");
+            writeStr("    ");
+            
+            // Print file inode number
+            itoa(status.inodeNo, s);
+            writeStr(s);
+            writeStr("     ");
+            
+            // Print file size in bytes
+            itoa(status.size, s);
+            writeStr(s);
+            writeStr("\n");
+
+            i++;
+        } while (fs_ls_one(i, fileName) != -1);
+    } else {
+        writeStr("Problem with ls\n");
+    }
 }
 
 static void shell_link( void) {

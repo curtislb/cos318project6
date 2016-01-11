@@ -270,7 +270,9 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
 
     // Fail if too many entries in directory
     block_entries = BLOCK_SIZE / sizeof(entry_t);
+    printf("block_entries = %d\n", block_entries);
     curr_entries = inode->size / sizeof(entry_t);
+    printf("curr_entries = %d\n", curr_entries);
     if (curr_entries >= block_entries * INODE_ADDRS) {
         ERROR_MSG("dir_add_entry: Too many entries in directory");
         return FAILURE;
@@ -505,7 +507,7 @@ int fs_mkfs(void) {
 
 int fs_open(char *fileName, int flags) {
     int entry_inode;
-    int is_new_file;
+    int is_new_file = FALSE;
     int result;
     inode_t *inode;
     char inode_buf[BLOCK_SIZE];
@@ -545,6 +547,7 @@ int fs_open(char *fileName, int flags) {
         result = dir_add_entry(wdir, entry_inode, fileName);
         if (result == FAILURE) {
             ERROR_MSG("fs_open: File does not exist and could not be created");
+            inode_free(entry_inode);
             return FAILURE;
         }
 
@@ -552,13 +555,8 @@ int fs_open(char *fileName, int flags) {
         is_new_file = TRUE;
     }
     
-    // Read inode, and fail if not a file
+    // Read inode from disk
     inode = inode_read(entry_inode, inode_buf);
-    if (inode->type != FILE_TYPE) {
-        ERROR_MSG("fs_open: Specified file is not of type FILE_TYPE");
-        ASSERT(!is_new_file);
-        return FAILURE;
-    }
 
     // Open entry in file descriptor table
     fd = fd_open(entry_inode, flags);
@@ -671,7 +669,7 @@ int fs_read(int fd, char *buf, int count) {
 
     // Read file inode from disk
     inode = inode_read(file->inode, inode_buf);
-    ASSERT(inode->type == FILE_TYPE);
+    ASSERT(inode->type != FREE_INODE);
 
     // Read no more than remaining bytes in file
     avail_bytes = inode->size - file->cursor;
@@ -763,7 +761,7 @@ int fs_write(int fd, char *buf, int count) {
 
     // Read file inode from disk
     inode = inode_read(file->inode, inode_buf);
-    ASSERT(inode->type == FILE_TYPE);
+    ASSERT(inode->type != FREE_INODE);
 
     // If cursor after end of file, pad with zeros up to cursor
     index_start = inode->size / BLOCK_SIZE;
@@ -1044,3 +1042,6 @@ int fs_stat(char *fileName, fileStat *buf) {
     return SUCCESS;
 }
 
+int fs_ls_one(int index, char *buf) {
+    return -1;
+}

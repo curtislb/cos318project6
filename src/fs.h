@@ -21,6 +21,7 @@ int fs_cd(char *dirName);
 int fs_link(char *old_fileName, char *new_fileName);
 int fs_unlink(char *fileName);
 int fs_stat(char *fileName, fileStat *buf);
+int fs_ls_one(int index, char *buf);
 
 #define MAX_FILE_NAME 32
 #define MAX_PATH_NAME 256 /* This is the maximum supported "full" path len,
@@ -55,24 +56,29 @@ typedef struct {
 /* i-Nodes *******************************************************************/
 
 #define INODE_ADDRS 8
+#define INODE_PADDING 4
 
 typedef struct {
     short type; // The file type (DIRECTORY, FILE_TYPE)
-    char links; // Number of links to the i-node
     short fd_count; // Number of open file descriptors
     int size; // File size in bytes
     short blocks[INODE_ADDRS]; // File data blocks
     short used_blocks; // Number of in-use data blocks
+    char links; // Number of links to the i-node
+    char _padding[INODE_PADDING];
 } inode_t;
 
 /* Directories ***************************************************************/
 
 #define ROOT_DIR 0
 
+#define ENTRY_PADDING 28
+
 typedef struct {
-    uint8_t in_use;
     short inode;
+    uint8_t in_use;
     char name[MAX_FILE_NAME + 1];
+    char _padding[ENTRY_PADDING];
 } entry_t;
 
 /* File descriptor table *****************************************************/
