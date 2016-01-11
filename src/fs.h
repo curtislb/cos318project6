@@ -59,11 +59,11 @@ typedef struct {
 #define INODE_PADDING 4
 
 typedef struct {
+    int size; // File size in bytes
     short type; // The file type (DIRECTORY, FILE_TYPE)
     short fd_count; // Number of open file descriptors
-    int size; // File size in bytes
-    short blocks[INODE_ADDRS]; // File data blocks
     short used_blocks; // Number of in-use data blocks
+    short blocks[INODE_ADDRS]; // File data blocks
     char links; // Number of links to the i-node
     char _padding[INODE_PADDING];
 } inode_t;
@@ -75,19 +75,19 @@ typedef struct {
 #define ENTRY_PADDING 28
 
 typedef struct {
-    short inode;
-    uint8_t in_use;
-    char name[MAX_FILE_NAME + 1];
+    short inode; // Corresponding inode index on disk
+    uint8_t in_use; // Is this entry currently in use?
+    char name[MAX_FILE_NAME + 1]; // File name of the entry
     char _padding[ENTRY_PADDING];
 } entry_t;
 
 /* File descriptor table *****************************************************/
 
 typedef struct {
-    uint8_t is_open;
-    short inode;
-    short mode;
-    int cursor;
+    bool_t is_open; // Is this fd table entry open?
+    int cursor; // Current r/w position in file (in bytes)
+    short inode; // Corresponding inode index on disk
+    short mode; // The file r/w mode (FS_O_RDONLY, FS_O_WRONLY, FS_ORDWR)
 } file_t;
 
 #endif

@@ -610,17 +610,15 @@ int fs_close(int fd) {
     ASSERT(inode->type == FILE_TYPE);
     ASSERT(inode->fd_count > 0);
 
-    // Close fd table entry and update open fd count
+    // Close fd table entry
     fd_close(fd);
-    inode->fd_count--;
 
-    // If no links or open fd table entries, delete the file
+    // Decrement open fd count and delete file if necessary
+    inode->fd_count--;
     if (inode->links == 0 && inode->fd_count == 0) {
         inode_free(inode_index);
-    }
-
-    // Write updated inode to disk
-    else {
+    } else {
+        // Write updated inode to disk
         inode_write(inode_index, inode_buf);
     }
 
@@ -963,11 +961,17 @@ int fs_rmdir(char *fileName) {
         return FAILURE;
     }
 
-    // Free directory inode on disk
-    inode_free(inode_index);
-
     // Remove entry from working directory
     dir_remove_entry(wdir, fileName);
+
+    // Decrement link count and delete directory if necessary
+    inode->links--;
+    if (inode->links == 0 && inode->fd_count == 0) {
+        inode_free(inode_index);
+    } else {
+        // Write updated inode to disk
+        inode_write(inode_index, inode_buf);
+    }
 
     return SUCCESS;
 }
@@ -1040,7 +1044,8 @@ int fs_link(char *old_fileName, char *new_fileName) {
     inode = inode_read(inode_index, inode_buf);
     ASSERT(inode->type != FREE_INODE);
     if (inode->type == DIRECTORY) {
-        ERROR_MSG("fs_link: Cannot create link to a directory");
+        ERROR_MSG("fs_link: Cannot link a directory");
+        return FAILURE;
     }
 
     // Attempt to add new link to working directory
@@ -1058,7 +1063,41 @@ int fs_link(char *old_fileName, char *new_fileName) {
 }
 
 int fs_unlink(char *fileName) {
-    return -1;
+    int inode_index;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
+
+    // Fail if fileName is NULL
+    if (fileName == NULL) {
+        ERROR_MSG("fs_unlink: fileName cannot be NULL");
+        return FAILURE;
+    }
+
+    // Attempt to find file in working directory
+    inode_index = dir_find_entry(wdir, fileName);
+    if (inode_index == FAILURE) {
+        ERROR_MSG("fs_unlink: Specified file does not exist");
+        return FAILURE;
+    }
+
+    // Read file inode from disk, fail if not a file
+    inode = inode_read(inode_index, inode_buf);
+    ASSERT(inode->type != FREE_INODE);
+    if (inode->type == DIRECTORY) {
+        ERROR_MSG("fs_unlink: Cannot unlink a directory");
+        return FAILURE;
+    }
+
+    // Decrement link count and delete file if necessary
+    inode->links--;
+    if (inode->links == 0 && inode->fd_count == 0) {
+        inode_free(inode_index);
+    } else {
+        // Write updated inode to disk
+        inode_write(inode_index, inode_buf);
+    }
+
+    return SUCCESS;
 }
 
 int fs_stat(char *fileName, fileStat *buf) {
