@@ -43,6 +43,8 @@ void delay(int n)
     for (i = 0; i < n; i++) {
 	j = i * 11;
     }
+    
+    j = j;
 }
 
 void 

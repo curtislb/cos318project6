@@ -342,7 +342,7 @@ static int dir_remove_entry(int dir_inode, char *name) {
         for (j = 0; j < block_entries; j++) {
             if (entries[j].in_use && same_string(entries[j].name, name)) {
                 // Mark entry as free on disk
-                entries[j].in_use = (uint8_t)FALSE;
+                entries[j].in_use = FALSE;
                 data_write(inode->blocks[i], data_buf);
 
                 return SUCCESS;
@@ -402,7 +402,7 @@ static int fd_open(int inode, int mode) {
     for (i = 0; i < MAX_FILE_COUNT; i++) {
         if (!fd_table[i].is_open) {
             // Set up fd table entry
-            fd_table[i].is_open = (uint8_t)TRUE;
+            fd_table[i].is_open = TRUE;
             fd_table[i].inode = inode;
             fd_table[i].mode = mode;
             fd_table[i].cursor = 0;
@@ -421,7 +421,7 @@ static void fd_close(int fd) {
     ASSERT(fd >= 0 && fd < MAX_FILE_COUNT);
     ASSERT(fd_table[fd].is_open);
 
-    fd_table[fd].is_open = (uint8_t)FALSE;
+    fd_table[fd].is_open = FALSE;
 }
 
 /* File system operations ****************************************************/
@@ -449,7 +449,7 @@ void fs_init(void) {
 
         // Mark all file descriptor table entries as free
         for (i = 0; i < MAX_FILE_COUNT; i++) {
-            fd_table[i].is_open = (uint8_t)FALSE;
+            fd_table[i].is_open = FALSE;
         }
     }
 }
@@ -497,7 +497,7 @@ int fs_mkfs(void) {
 
     // Mark all file descriptor table entries as free
     for (i = 0; i < MAX_FILE_COUNT; i++) {
-        fd_table[i].is_open = (uint8_t)FALSE;
+        fd_table[i].is_open = FALSE;
     }
 
     return SUCCESS;
@@ -1007,6 +1007,40 @@ int fs_unlink(char *fileName) {
 }
 
 int fs_stat(char *fileName, fileStat *buf) {
-    return -1;
+    int inode_index;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
+
+    // Fail if fileName is NULL
+    if (fileName == NULL) {
+        ERROR_MSG("fs_stat: fileName cannot be NULL");
+        return FAILURE;
+    }
+
+    // Fail if buf is NULL
+    if (buf == NULL) {
+        ERROR_MSG("fs_stat: buf cannot be NULL");
+        return FAILURE;
+    }
+
+    // Search for file in working directory
+    inode_index = dir_find_entry(wdir, fileName);
+    if (inode_index == FAILURE) {
+        ERROR_MSG("fs_stat: Specified file does not exist");
+        return FAILURE;
+    }
+
+    // Read inode from disk
+    inode = inode_read(inode_index, inode_buf);
+    ASSERT(inode->type != FREE_INODE);
+
+    // Copy fields from inode to fileStat
+    buf->inodeNo = inode_index;
+    buf->type = inode->type;
+    buf->links = inode->links;
+    buf->size = inode->size;
+    buf->numBlocks = inode->used_blocks;
+
+    return SUCCESS;
 }
 
