@@ -185,8 +185,9 @@ static void inode_write(int index, char *block_buf) {
 }
 
 static int inode_create(int type) {
-    int i, j;
     int block_inodes;
+    int block;
+    int inode;
     char block_buf[BLOCK_SIZE];
     inode_t *inodes;
 
@@ -194,17 +195,17 @@ static int inode_create(int type) {
 
     // Search for free inode entry
     block_inodes = BLOCK_SIZE / sizeof(inode_t);
-    for (i = 0; i < MAX_FILE_COUNT; i++) {
-        block_read(sblock->inode_start + i, block_buf);
-        inodes = (inode_t *)block_buf;
-        for (j = 0; j < block_inodes; j++) {
-            if (inodes[j].type == FREE_INODE) {
+    inodes = (inode_t *)block_buf;
+    for (block = 0; block < sblock->inode_blocks; block++) {
+        block_read(sblock->inode_start + block, block_buf);
+        for (inode = 0; inode < block_inodes; inode++) {
+            if (inodes[inode].type == FREE_INODE) {
                 // Write the new inode to disk
-                inode_init(&inodes[j], type);
-                block_write(sblock->inode_start + i, block_buf);
+                inode_init(&inodes[inode], type);
+                block_write(sblock->inode_start + block, block_buf);
 
                 // Return index of newly created inode
-                return (i * block_inodes) + j;
+                return (block * block_inodes) + inode;
             }
         }
     }
@@ -246,7 +247,6 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
     char data_buf[BLOCK_SIZE];
     int block_entries;
     int curr_entries;
-    entry_t new_entry;
     entry_t *entries;
     int block_index;
     int entry_offset;
@@ -268,10 +268,6 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
         return FAILURE;
     }
 
-    // Initialize new directory entry
-    new_entry.inode = entry_inode;
-    str_copy(name, new_entry.name);
-
     // Determine index of data block and offset within block
     block_index = curr_entries / block_entries;
     entry_offset = curr_entries % block_entries;
@@ -288,10 +284,11 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
     }
 
     // Add entry to data block
-    data_read(block_index, data_buf);
+    data_read(inode->blocks[block_index], data_buf);
     entries = (entry_t *)data_buf;
-    entries[entry_offset] = new_entry;
-    data_write(block_index, data_buf);
+    entries[entry_offset].inode = entry_inode;
+    str_copy(name, entries[entry_offset].name);
+    data_write(inode->blocks[block_index], data_buf);
 
     // Write changes to inode on disk
     inode->size += sizeof(entry_t);
@@ -391,42 +388,6 @@ static int dir_find_entry(int dir_inode, char *name) {
     ERROR_MSG("dir_find_entry: No matching entry found")
     return FAILURE;
 }
-
-// static int dir_entry_name(int dir_inode, int index, char *buf) {
-//     inode_t *inode;
-//     char inode_buf[BLOCK_SIZE];
-//     char data_buf[BLOCK_SIZE];
-//     int block_entries;
-//     int block_index;
-//     int entry_offset;
-//     entry_t *entries;
-
-//     ASSERT(dir_inode >= 0 && dir_inode < MAX_FILE_COUNT);
-//     ASSERT(index >= 0);
-//     ASSERT(buf != NULL);
-
-//     // Read directory inode from disk
-//     inode = inode_read(dir_inode, inode_buf);
-//     ASSERT(inode->type == DIRECTORY);
-
-//     // Fail if index is too large for directory
-//     if (index >= inode->size / sizeof(entry_t)) {
-//         ERROR_MSG("dir_entry_name: Specified index too large for directory");
-//         return FAILURE;
-//     }
-
-//     // Determine index of data block and offset within block
-//     block_entries = BLOCK_SIZE / sizeof(entry_t);
-//     block_index = index / block_entries;
-//     entry_offset = index % block_entries;
-
-//     // Copy entry name from disk to string buffer
-//     data_read(inode->blocks[block_index], data_buf);
-//     entries = (entry_t *)data_buf;
-//     str_copy(entries[entry_offset].name, buf);
-
-//     return SUCCESS;
-// }
 
 /* File descriptor table *****************************************************/
 
@@ -935,6 +896,7 @@ int fs_mkdir(char *fileName) {
     }
 
     // Add self link to new directory
+    printf("Adding '.' ...\n");
     result = dir_add_entry(inode_index, inode_index, ".");
     if (result == FAILURE) {
         ERROR_MSG("fs_mkdir: Failed to add '.' to new directory");
@@ -943,6 +905,7 @@ int fs_mkdir(char *fileName) {
     }
 
     // Add parent link to new directory
+    printf("Adding '..' ...\n");
     result = dir_add_entry(inode_index, wdir, "..");
     if (result == FAILURE) {
         ERROR_MSG("fs_mkdir: Failed to add '..' to new directory");
@@ -951,6 +914,7 @@ int fs_mkdir(char *fileName) {
     }
 
     // Link to new directory from working directory
+    printf("Adding subdir ...\n");
     result = dir_add_entry(wdir, inode_index, fileName);
     if (result == FAILURE) {
         ERROR_MSG("fs_mkdir: Failed to add entry to working directory");
@@ -989,6 +953,12 @@ int fs_rmdir(char *fileName) {
     inode = inode_read(inode_index, inode_buf);
     if (inode->type != DIRECTORY) {
         ERROR_MSG("fs_rmdir: Specified file is not a directory");
+        return FAILURE;
+    }
+
+    // Fail if working directory contains entries
+    if (inode->size > 2 * sizeof(entry_t)) {
+        ERROR_MSG("fs_rmdir: Cannot remove non-empty directory");
         return FAILURE;
     }
 
@@ -1175,5 +1145,45 @@ int fs_stat(char *fileName, fileStat *buf) {
 }
 
 int fs_ls_one(int index, char *buf) {
-    return -1;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
+    char data_buf[BLOCK_SIZE];
+    int block_entries;
+    int block_index;
+    int entry_offset;
+    entry_t *entries;
+
+    // Fail if index is negative
+    if (index < 0) {
+        ERROR_MSG("fs_ls_one: index cannot be negative");
+        return FAILURE;
+    }
+
+    // Fail if buf is NULL
+    if (buf == NULL) {
+        ERROR_MSG("fs_ls_one: buf cannot be NULL");
+        return FAILURE;
+    }
+
+    // Read working directory inode from disk
+    inode = inode_read(wdir, inode_buf);
+    ASSERT(inode->type == DIRECTORY);
+
+    // Fail if index is too large for directory
+    if (index >= inode->size / sizeof(entry_t)) {
+        ERROR_MSG("fs_ls_one: Specified index too large for directory");
+        return FAILURE;
+    }
+
+    // Determine index of data block and offset within block
+    block_entries = BLOCK_SIZE / sizeof(entry_t);
+    block_index = index / block_entries;
+    entry_offset = index % block_entries;
+
+    // Copy entry name from disk to string buffer
+    data_read(inode->blocks[block_index], data_buf);
+    entries = (entry_t *)data_buf;
+    str_copy(entries[entry_offset].name, buf);
+
+    return SUCCESS;
 }
