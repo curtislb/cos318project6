@@ -57,36 +57,30 @@ typedef struct {
 #define INODE_ADDRS 8
 
 typedef struct {
-    short type; // the file type (DIRECTORY, FILE_TYPE)
-    char links; // number of links to the i-node
-    short fd_count; // number of open file descriptors
-    int size; // file size in bytes
-    short blocks[INODE_ADDRS]; // file data blocks
-    short used_blocks; // number of in-use data blocks
+    short type; // The file type (DIRECTORY, FILE_TYPE)
+    char links; // Number of links to the i-node
+    short fd_count; // Number of open file descriptors
+    int size; // File size in bytes
+    short blocks[INODE_ADDRS]; // File data blocks
+    short used_blocks; // Number of in-use data blocks
 } inode_t;
 
-/* Files and directories *****************************************************/
+/* Directories ***************************************************************/
 
 #define ROOT_DIR 0
 
-// Working directory
-typedef struct {
-    short inode;
-    char path[MAX_PATH_NAME + 1];
-} wdir_t;
-
-// Directory entry
 typedef struct {
     uint8_t in_use;
     short inode;
     char name[MAX_FILE_NAME + 1];
 } entry_t;
 
-// File descriptor table entry
+/* File descriptor table *****************************************************/
+
 typedef struct {
     uint8_t is_open;
     short inode;
-    int mode;
+    short mode;
     int cursor;
 } file_t;
 

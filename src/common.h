@@ -141,9 +141,9 @@ typedef struct {
 //	Return size of message including header
 #define MSG_SIZE(m) (MSG_T_HEADER_SIZE + m->size)
 
-// struct directory_t {
-// 	int location;	//	Sector number
-// 	int size;		//	Size in number of sectors
-// };
+struct directory_t {
+	int location;	//	Sector number
+	int size;		//	Size in number of sectors
+};
 
 #endif

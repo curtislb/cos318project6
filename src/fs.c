@@ -10,7 +10,7 @@
 
 #ifdef FAKE
 #include <stdio.h>
-#define ERROR_MSG(m) printf m;
+#define ERROR_MSG(m) printf("%s\n", m);
 #else
 #define ERROR_MSG(m)
 #endif
@@ -18,6 +18,9 @@
 /* Static helper functions ***************************************************/
 
 static int ceil_div(int m, int n) {
+    ASSERT(m > 0);
+    ASSERT(n > 0);
+
     return ((m - 1) / n) + 1;
 }
 
@@ -29,20 +32,14 @@ static void str_copy(char *src, char *dest) {
     bcopy((unsigned char *)src, (unsigned char *)dest, strlen(src));
 }
 
-static void str_append(char *src, char *dest) {
-    bcopy(
-        (unsigned char *)src,
-        (unsigned char *)&dest[strlen(dest)],
-        strlen(src)
-    );
-}
-
 /* Super block ***************************************************************/
 
 static sblock_t *sblock;
 static char sblock_buf[BLOCK_SIZE];
 
 static void sblock_init(sblock_t *sblock) {
+    ASSERT(sblock != NULL);
+
     sblock->fs_size = FS_SIZE;
 
     sblock->inode_start = SUPER_BLOCK + 1;
@@ -57,26 +54,38 @@ static void sblock_init(sblock_t *sblock) {
 }
 
 static sblock_t *sblock_read(char *block_buf) {
+    ASSERT(block_buf != NULL);
+
     block_read(SUPER_BLOCK, block_buf);
     return (sblock_t *)block_buf;
 }
 
 static void sblock_write(char *block_buf) {
+    ASSERT(block_buf != NULL);
+
     block_write(SUPER_BLOCK, block_buf);
 }
 
 /* Block allocation map ******************************************************/
 
 static int bamap_block(int index) {
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
+
     return sblock->bamap_start + (index * sizeof(uint8_t) / BLOCK_SIZE);
 }
 
 static uint8_t *bamap_read(int index, char *block_buf) {
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
+    ASSERT(block_buf != NULL);
+
     block_read(bamap_block(index), block_buf);
     return (uint8_t *)&block_buf[index % BLOCK_SIZE];
 }
 
 static void bamap_write(int index, char *block_buf) {
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
+    ASSERT(block_buf != NULL);
+
     block_write(bamap_block(index), block_buf);
 }
 
@@ -100,69 +109,79 @@ static int block_alloc(void) {
     }
 
     // No free blocks found
+    ERROR_MSG("block_alloc: No free blocks found");
     return FAILURE;
 }
 
-static int block_free(int index) {
+static void block_free(int index) {
     uint8_t *in_use;
     char block_buf[BLOCK_SIZE];
 
-    // Read block usage flag, fail if not in use
-    in_use = bamap_read(index, block_buf);
-    if (!(*in_use)) {
-        return FAILURE;
-    }
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
 
-    // Mark block as free on disk
+    in_use = bamap_read(index, block_buf);
+    ASSERT(*in_use);
+
     *in_use = FALSE;
     bamap_write(index, block_buf);
-
-    return SUCCESS;
 }
 
 /* Data blocks ***************************************************************/
 
 static void data_read(int index, char *block_buf) {
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
+    ASSERT(block_buf != NULL);
+
     block_read(sblock->data_start + index, block_buf);
 }
 
 static void data_write(int index, char *block_buf) {
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
+    ASSERT(block_buf != NULL);
+
     block_write(sblock->data_start + index, block_buf);
 }
 
 /* i-Nodes *******************************************************************/
 
 static void inode_init(inode_t *inode, int type) {
+    ASSERT(inode != NULL);
+    ASSERT(type == FILE_TYPE || type == DIRECTORY);
+
     inode->type = type;
     inode->links = 0;
     inode->fd_count = 0;
     inode->size = 0;
-    bzero(inode->blocks, sizeof(inode->blocks)); // GRUMP sizeof struct field
+    bzero((char *)inode->blocks, sizeof(inode->blocks));
     inode->used_blocks = 0;
 }
 
+static int inode_block(int index) {
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
+
+    int block_offset = index / (BLOCK_SIZE / sizeof(inode_t));
+    return sblock->inode_start + block_offset;
+}
+
 static inode_t *inode_read(int index, char *block_buf) {
-    int block_inodes;
-    int block_offset;
-    int block_index;
     inode_t *inodes;
 
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
+    ASSERT(block_buf != NULL);
+
     // Read block containing inode from disk
-    block_inodes = BLOCK_SIZE / sizeof(inode_t);
-    block_offset = index / block_inodes;
-    block_index = sblock->inode_start + block_offset;
-    block_read(block_index, block_buf);
+    block_read(inode_block(index), block_buf);
 
     // Return pointer to inode struct in data buffer
     inodes = (inode_t *)block_buf;
-    return &inodes[index % block_inodes];
+    return &inodes[index % (BLOCK_SIZE / sizeof(inode_t))];
 }
 
 static void inode_write(int index, char *block_buf) {
-    int block_inodes = BLOCK_SIZE / sizeof(inode_t);
-    int block_offset = index / block_inodes;
-    int block_index = sblock->inode_start + block_offset;
-    block_write(block_index, block_buf);
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
+    ASSERT(block_buf != NULL);
+
+    block_write(inode_block(index), block_buf);
 }
 
 static int inode_create(int type) {
@@ -170,7 +189,8 @@ static int inode_create(int type) {
     int block_inodes;
     char block_buf[BLOCK_SIZE];
     inode_t *inodes;
-    int new_block;
+
+    ASSERT(type == FILE_TYPE || type == DIRECTORY);
 
     // Search for free inode entry
     block_inodes = BLOCK_SIZE / sizeof(inode_t);
@@ -189,33 +209,42 @@ static int inode_create(int type) {
         }
     }
 
+    // No free inode entry found
+    ERROR_MSG("inode_create: No free inode entry found");
     return FAILURE;
 }
 
-static int inode_free(inode_t *inode) {
+static void inode_free(int index) {
     int i;
-    int result;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
 
-    // Fail if inode is already free
-    if (inode->type == FREE_INODE) {
-        return FAILURE;
-    }
+    ASSERT(index >= 0 && index < MAX_FILE_COUNT);
+
+    // Read inode from disk
+    inode = inode_read(index, inode_buf);
+    ASSERT(inode->type != FREE_INODE);
 
     // Free all data blocks used by inode
     for (i = 0; i < inode->used_blocks; i++) {
-        result = block_free(inode->blocks[i]);
-        ASSERT(result != FAILURE);
+        block_free(inode->blocks[i]);
     }
 
     // Mark inode as free on disk
     inode->type = FREE_INODE;
-
-    return SUCCESS;
+    inode_write(index, inode_buf);
 }
 
 /* Directories ***************************************************************/
 
+// Current working directory inode
+static int wdir;
+
 static void entry_init(entry_t *entry, int inode, char *name) {
+    ASSERT(entry != NULL);
+    ASSERT(inode >= 0 && inode < MAX_FILE_COUNT);
+    ASSERT(name != NULL);
+
     entry->in_use = TRUE;
     entry->inode = inode;
     str_copy(name, entry->name);
@@ -232,6 +261,10 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
     entry_t new_entry;
     int new_block;
 
+    ASSERT(dir_inode >= 0 && dir_inode < MAX_FILE_COUNT);
+    ASSERT(entry_inode >= 0 && entry_inode < MAX_FILE_COUNT);
+    ASSERT(name != NULL);
+
     // Read directory inode from disk
     inode = inode_read(dir_inode, inode_buf);
 
@@ -239,6 +272,7 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
     block_entries = BLOCK_SIZE / sizeof(entry_t);
     curr_entries = inode->size / sizeof(entry_t);
     if (curr_entries >= block_entries * INODE_ADDRS) {
+        ERROR_MSG("dir_add_entry: Too many entries in directory");
         return FAILURE;
     }
 
@@ -257,27 +291,31 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
 
                 // Write changes to inode on disk
                 inode->size += sizeof(entry_t);
-                inode_write(dir_inode);
+                inode_write(dir_inode, inode_buf);
 
                 return SUCCESS;
             }
         }
     }
 
-    // All entries used, so allocate new block
+    // All entries used, so try to allocate new block
     new_block = block_alloc();
-    inode->blocks[used_blocks] = new_block;
+    if (new_block == FAILURE) {
+        ERROR_MSG("dir_add_entry: Failed to allocate new data block");
+        return FAILURE;
+    }
+    inode->blocks[inode->used_blocks] = new_block;
     inode->used_blocks++;
 
     // Add entry to newly allocated block
-    bzero_block(block_buf);
-    entries = (entry_t *)block_buf;
+    bzero_block(data_buf);
+    entries = (entry_t *)data_buf;
     entries[0] = new_entry;
-    data_write(new_block, block_buf);
+    data_write(new_block, data_buf);
 
     // Write changes to inode on disk
     inode->size += sizeof(entry_t);
-    inode_write(dir_inode);
+    inode_write(dir_inode, inode_buf);
 
     return SUCCESS;
 }
@@ -287,7 +325,11 @@ static int dir_remove_entry(int dir_inode, char *name) {
     inode_t *inode;
     char inode_buf[BLOCK_SIZE];
     char data_buf[BLOCK_SIZE];
+    int block_entries;
     entry_t *entries;
+
+    ASSERT(dir_inode >= 0 && dir_inode < MAX_FILE_COUNT);
+    ASSERT(name != NULL);
 
     // Read directory inode from disk
     inode = inode_read(dir_inode, inode_buf);
@@ -309,6 +351,7 @@ static int dir_remove_entry(int dir_inode, char *name) {
     }
 
     // No matching entry found
+    ERROR_MSG("dir_remove_entry: No matching entry found");
     return FAILURE;
 }
 
@@ -337,59 +380,29 @@ static int dir_find_entry(int dir_inode, char *name) {
     }
 
     // No matching entry found
+    ERROR_MSG("dir_find_entry: No matching entry found")
     return FAILURE;
 }
 
-/* Working directory *********************************************************/
-
-static wdir_t wdir;
-
-static void wdir_set_path(char *path) {
-    str_copy(path, wdir.path);
-}
-
-static void wdir_append_path(char *dirname) {
-    str_append(dirname, wdir.path);
-    str_append("/", wdir.path);
-}
-
-static void wdir_truncate_path(void) {
-    int i;
-    int path_len;
-
-    // Cannot truncate path from root directory
-    path_len = strlen(wdir.path);
-    ASSERT(path_len > 0);
-    ASSERT(path_len <= MAX_PATH_NAME);
-    if (path_len == 1) {
-        return;
-    }
-
-    // Terminate string after penultimate '/'
-    for (i = strlen(wdir.path) - 2; i >= 0; i--) {
-        if (wdir.path[i] == '/') {
-            wdir.path[i + 1] = '\0';
-            return;
-        }
-    }
-}
+// static void dir_defragment(int dir_inode) {
+//     // TODO: fill this in
+// }
 
 /* File descriptor table *****************************************************/
 
 static file_t fd_table[MAX_FILE_COUNT];
 
-static void fd_init(int fd) {
-    fd_table[fd].is_open = FALSE;
-}
-
 static int fd_open(int inode, int mode) {
     int i;
+
+    ASSERT(inode >= 0 && inode < MAX_FILE_COUNT);
+    ASSERT(mode == FS_O_RDONLY || mode == FS_O_WRONLY || mode == FS_O_RDWR);
 
     // Search for and open free fd table entry
     for (i = 0; i < MAX_FILE_COUNT; i++) {
         if (!fd_table[i].is_open) {
             // Set up fd table entry
-            fd_table[i].is_open = TRUE;
+            fd_table[i].is_open = (uint8_t)TRUE;
             fd_table[i].inode = inode;
             fd_table[i].mode = mode;
             fd_table[i].cursor = 0;
@@ -400,161 +413,209 @@ static int fd_open(int inode, int mode) {
     }
 
     // No free fd table entries found
+    ERROR_MSG("fd_open: No free entries found");
     return FAILURE;
 }
 
-static int fd_close(int fd) {
-    // Fail if fd table entry is not open
-    if (!fd_table[i].is_open) {
-        return FAILURE;
-    }
+static void fd_close(int fd) {
+    ASSERT(fd >= 0 && fd < MAX_FILE_COUNT);
+    ASSERT(fd_table[fd].is_open);
 
-    // Mark fd table entry as free
-    fd_table[fd].is_open = FALSE;
-    return SUCCESS;
+    fd_table[fd].is_open = (uint8_t)FALSE;
 }
 
 /* File system operations ****************************************************/
 
 void fs_init(void) {
+    int i;
+    int result;
+
+    // Initialize block device
     block_init();
 
-    // TODO: wtf i don't even know, man
+    // Format disk if necessary
+    sblock = sblock_read(sblock_buf);
+    if (sblock->magic_num != SUPER_MAGIC_NUM) {
+        result = fs_mkfs();
+        if (result == FAILURE) {
+            ERROR_MSG("fs_init: Failed to format disk");
+        }
+    }
+
+    // Set up working directory and file descriptor table
+    else {
+        // Mount root as current working directory
+        wdir = ROOT_DIR;
+
+        // Mark all file descriptor table entries as free
+        for (i = 0; i < MAX_FILE_COUNT; i++) {
+            fd_table[i].is_open = (uint8_t)FALSE;
+        }
+    }
 }
 
 int fs_mkfs(void) {
     int i;
     char block_buf[BLOCK_SIZE];
     inode_t *inode;
-    uint8_t *in_use;
+    int result;
 
-    // Format disk if necessary
-    sblock = sblock_read(sblock_buf);
-    if (sblock->magic_num != SUPER_MAGIC_NUM) {
-        // Zero out all file system blocks
-        bzero_block(block_buf);
-        for (i = 0; i < FS_SIZE; i++) {
-            block_write(i, block_buf);
-        }
+    // Zero out all file system blocks
+    bzero_block(block_buf);
+    for (i = 0; i < FS_SIZE; i++) {
+        block_write(i, block_buf);
+    }
 
-        // Write super block to disk
-        bzero_block(sblock_buf);
-        sblock_init(sblock);
-        sblock_write(sblock_buf);
+    // Write super block to disk
+    bzero_block(sblock_buf);
+    sblock_init(sblock);
+    sblock_write(sblock_buf);
 
-        // Create inode for root directory
-        inode = inode_read(ROOT_DIR, block_buf);
-        inode_init(inode, DIRECTORY);
-        inode->blocks[0] = ROOT_DIR;
-        inode->used_blocks = 1;
-        inode_write(ROOT_DIR, block_buf);
+    // Create inode for root directory
+    inode = inode_read(ROOT_DIR, block_buf);
+    inode_init(inode, DIRECTORY);
+    inode_write(ROOT_DIR, block_buf);
 
-        // Mark root directory data block as used
-        in_use = bamap_read(ROOT_DIR, block_buf);
-        *in_use = TRUE;
-        bamap_write(ROOT_DIR, block_buf);
+    // Add "." self link meta-directory to root
+    result = dir_add_entry(ROOT_DIR, ROOT_DIR, ".");
+    if (result == FAILURE) {
+        ERROR_MSG("fs_mkfs: Failed to add '.' to root directory");
+        inode_free(ROOT_DIR);
+        return FAILURE;
+    }
 
-        // Set up root directory with '.' and '..' entries
-        dir_add_entry(ROOT_INODE, ROOT_INODE, ".");
-        dir_add_entry(ROOT_INODE, ROOT_INODE, "..");
+    // Add ".." parent (self) link meta-directory to root
+    result = dir_add_entry(ROOT_DIR, ROOT_DIR, "..");
+    if (result == FAILURE) {
+        ERROR_MSG("fs_mkfs: Failed to add '..' to root directory");
+        inode_free(ROOT_DIR);
+        return FAILURE;
     }
 
     // Mount root as current working directory
-    wdir.inode = ROOT_DIR;
-    wdir_set_path("/");
+    wdir = ROOT_DIR;
 
-    // Initialize the file descriptor table
+    // Mark all file descriptor table entries as free
     for (i = 0; i < MAX_FILE_COUNT; i++) {
-        fd_init(i);
+        fd_table[i].is_open = (uint8_t)FALSE;
     }
 
-    return SUCCESS; // GRUMP when will this fail?
+    return SUCCESS;
 }
 
 int fs_open(char *fileName, int flags) {
     int entry_inode;
+    int is_new_file;
     int result;
-    char block_buf[BLOCK_SIZE];
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
     int fd;
 
+    // Fail if file name is NULL
+    if (fileName == NULL) {
+        ERROR_MSG("fs_open: fileName cannot be NULL");
+        return FAILURE;
+    }
+
+    // Fail if flags is not valid
+    if (flags != FS_O_RDONLY && flags != FS_O_WRONLY && flags != FS_O_RDWR) {
+        ERROR_MSG("fs_open: Received invalid flags argument");
+        return FAILURE;
+    }
+
     // Search for entry in working directory
-    entry_inode = dir_find_entry(wdir.inode, fileName);
+    entry_inode = dir_find_entry(wdir, fileName);
 
     // If entry does not exist, attempt to create it
     if (entry_inode == FAILURE) {
         // Fail if trying to open non-existent file read-only
         if (flags == FS_O_RDONLY) {
+            ERROR_MSG("fs_open: File does not exist and could not be created");
             return FAILURE;
         }
 
         // Create new inode for file
         entry_inode = inode_create(FILE_TYPE);
         if (entry_inode == FAILURE) {
+            ERROR_MSG("fs_open: File does not exist and could not be created");
             return FAILURE;
         }
 
         // Add new file entry to working directory
-        result = dir_add_entry(wdir.inode, entry_inode, fileName);
+        result = dir_add_entry(wdir, entry_inode, fileName);
         if (result == FAILURE) {
+            ERROR_MSG("fs_open: File does not exist and could not be created");
             return FAILURE;
         }
+
+        // Indicate newly created file
+        is_new_file = TRUE;
     }
     
     // Read inode, and fail if not a file
-    inode = inode_read(entry_inode, block_buf);
+    inode = inode_read(entry_inode, inode_buf);
     if (inode->type != FILE_TYPE) {
+        ERROR_MSG("fs_open: Specified file is not of type FILE_TYPE");
+        ASSERT(!is_new_file);
         return FAILURE;
     }
 
     // Open entry in file descriptor table
     fd = fd_open(entry_inode, flags);
     if (fd == FAILURE) {
+        ERROR_MSG("fs_open: Failed to create file descriptor table entry");
+
+        // If new inode was allocated, then free it
+        if (is_new_file) {
+            inode_free(entry_inode);
+        }
+
         return FAILURE;
     }
 
     // Increment open fd count for inode
     inode->fd_count++;
-    inode_write(file_inode, block_buf);
+    inode_write(entry_inode, inode_buf);
 
     return fd;
 }
 
 int fs_close(int fd) {
-    int i;
     int inode_index;
     inode_t *inode;
-    char block_buf[BLOCK_SIZE];
-    int result;
+    char inode_buf[BLOCK_SIZE];
 
     // Fail if given bad file descriptor
     if (fd < 0 || fd >= MAX_FILE_COUNT) {
+        ERROR_MSG("fs_close: Received invalid file descriptor");
         return FAILURE;
     }
 
     // Fail if fd table entry is already closed
     if (!fd_table[fd].is_open) {
+        ERROR_MSG("fs_close: Specified file descriptor is not open");
         return FAILURE;
     }
 
     // Read corresponding inode from disk
     inode_index = fd_table[fd].inode;
-    inode = inode_read(inode_index, block_buf);
+    inode = inode_read(inode_index, inode_buf);
     ASSERT(inode->type == FILE_TYPE);
     ASSERT(inode->fd_count > 0);
 
-    // Close fd table entry
-    result = fd_close(fd);
-    if (result == FAILURE) {
-        return FAILURE;
+    // Close fd table entry and update open fd count
+    fd_close(fd);
+    inode->fd_count--;
+
+    // If no links or open fd table entries, delete the file
+    if (inode->links == 0 && inode->fd_count == 0) {
+        inode_free(inode_index);
     }
 
-    // Decrement open fd count of inode, free inode if necessary
-    inode->fd_count--;
-    if (inode->links == 0 && inode->fd_count == 0) {
-        result = inode_free(inode);
-        ASSERT(result != FAILURE);
+    // Write updated inode to disk
+    else {
+        inode_write(inode_index, inode_buf);
     }
-    inode_write(inode_index, block_buf);
 
     return SUCCESS;
 }
@@ -572,14 +633,39 @@ int fs_read(int fd, char *buf, int count) {
     int block_bytes;
     int to_read;
 
+    // If count is 0, return 0 immediately
+    if (count == 0) {
+        return 0;
+    }
+
+    // Fail if given bad file descriptor
+    if (fd < 0 || fd >= MAX_FILE_COUNT) {
+        ERROR_MSG("fs_read: Received invalid file descriptor");
+        return FAILURE;
+    }
+
+    // Fail if buf is NULL
+    if (buf == NULL) {
+        ERROR_MSG("fs_read: buf cannot be NULL");
+        return FAILURE;
+    }
+
+    // Fail if attempting to read negative number of bytes
+    if (count < 0) {
+        ERROR_MSG("fs_read: count cannot be negative");
+        return FAILURE;
+    }
+
     // Cannot read from file if fd entry not open
     file = &fd_table[fd];
     if (!file->is_open) {
+        ERROR_MSG("fs_read: Specified file descriptor is not open");
         return FAILURE;
     }
 
     // Cannot read from file if opened write-only
     if (file->mode == FS_O_WRONLY) {
+        ERROR_MSG("fs_read: Cannot read from write-only file");
         return FAILURE;
     }
 
@@ -621,35 +707,57 @@ int fs_read(int fd, char *buf, int count) {
 }
     
 int fs_write(int fd, char *buf, int count) {
-    int i;
+    int i, j;
     file_t *file;
     inode_t *inode;
     char inode_buf[BLOCK_SIZE];
     char data_buf[BLOCK_SIZE];
     int index_start;
+    int old_used_blocks;
     int bytes_written;
     int block_offset;
     int block_bytes;
     int to_write;
 
+    // If count is 0, return 0 immediately
+    if (count == 0) {
+        return 0;
+    }
+
+    // Fail if given bad file descriptor
+    if (fd < 0 || fd >= MAX_FILE_COUNT) {
+        ERROR_MSG("fs_write: Received invalid file descriptor");
+        return FAILURE;
+    }
+
+    // Fail if buf is NULL
+    if (buf == NULL) {
+        ERROR_MSG("fs_write: buf cannot be NULL");
+        return FAILURE;
+    }
+
+    // Fail if attempting to write negative number of bytes
+    if (count < 0) {
+        ERROR_MSG("fs_write: count cannot be negative");
+        return FAILURE;
+    }
+
     // Cannot write to file if fd entry not open
     file = &fd_table[fd];
     if (!file->is_open) {
+        ERROR_MSG("fs_write: Specified file descriptor is not open");
         return FAILURE;
     }
 
     // Cannot write to file if opened read-only
     if (file->mode == FS_O_RDONLY) {
+        ERROR_MSG("fs_write: Cannot write to read-only file");
         return FAILURE;
     }
 
-    // If writing no bytes, return 0 immediately
-    if (count == 0) {
-        return 0;
-    }
-
-    // Cannot write beyond end of last data block
+    // Fail if cursor set after end of last data block
     if (file->cursor >= INODE_ADDRS * BLOCK_SIZE) {
+        ERROR_MSG("fs_write: Cannot write beyond max file size");
         return FAILURE;
     }
 
@@ -659,10 +767,21 @@ int fs_write(int fd, char *buf, int count) {
 
     // If cursor after end of file, pad with zeros up to cursor
     index_start = inode->size / BLOCK_SIZE;
+    old_used_blocks = inode->used_blocks;
     for (i = index_start; inode->size < file->cursor; i++) {
         // Allocate new data block if necessary
         if (i >= inode->used_blocks) {
             inode->blocks[i] = block_alloc();
+            if (inode->blocks[i] == FAILURE) {
+                ERROR_MSG("fs_write: Failed to allocate new data block");
+
+                // Free any newly allocated blocks on failure
+                for (j = old_used_blocks; j < inode->used_blocks; j++) {
+                    block_free(inode->blocks[j]);
+                }
+
+                return FAILURE;
+            }
             inode->used_blocks++;
         }
 
@@ -670,9 +789,9 @@ int fs_write(int fd, char *buf, int count) {
         data_read(inode->blocks[i], data_buf);
 
         // Determine offset and bytes to write in block
-        block_offset = file->size % BLOCK_SIZE;
+        block_offset = inode->size % BLOCK_SIZE;
         block_bytes = BLOCK_SIZE - block_offset;
-        to_write = min(file->cursor - file->size, block_bytes);
+        to_write = min(file->cursor - inode->size, block_bytes);
 
         // Write zero padding bytes to block on disk
         bzero(&data_buf[block_offset], to_write);
@@ -689,6 +808,16 @@ int fs_write(int fd, char *buf, int count) {
         // Allocate new data block if necessary
         if (i >= inode->used_blocks) {
             inode->blocks[i] = block_alloc();
+            if (inode->blocks[i] == FAILURE) {
+                ERROR_MSG("fs_write: Failed to allocate new data block");
+
+                // Free any newly allocated blocks on failure
+                for (j = old_used_blocks; j < inode->used_blocks; j++) {
+                    block_free(inode->blocks[j]);
+                }
+
+                return FAILURE;
+            }
             inode->used_blocks++;
         }
 
@@ -722,9 +851,22 @@ int fs_write(int fd, char *buf, int count) {
 int fs_lseek(int fd, int offset) {
     file_t *file;
 
+    // Fail if given bad file descriptor
+    if (fd < 0 || fd >= MAX_FILE_COUNT) {
+        ERROR_MSG("fs_lseek: Received invalid file descriptor");
+        return FAILURE;
+    }
+
+    // Fail if offset is negative
+    if (offset < 0) {
+        ERROR_MSG("fs_lseek: offset cannot be negative");
+        return FAILURE;
+    }
+
     // Cannot set cursor if fd entry not open
     file = &fd_table[fd];
     if (!file->is_open) {
+        ERROR_MSG("fs_lseek: Specified file descriptor is not open");
         return FAILURE;
     }
 
@@ -736,37 +878,46 @@ int fs_lseek(int fd, int offset) {
 int fs_mkdir(char *fileName) {
     int inode_index;
     int result;
-    inode_t *inode;
-    char inode_buf[BLOCK_SIZE];
+
+    // Fail if fileName is NULL
+    if (fileName == NULL) {
+        ERROR_MSG("fs_mkdir: fileName cannot be NULL");
+        return FAILURE;
+    }
 
     // Fail if directory already exists
-    if (dir_find_entry(wdir.inode, fileName) != FAILURE) {
+    if (dir_find_entry(wdir, fileName) != FAILURE) {
+        ERROR_MSG("fs_mkdir: Directory with given name already exists");
         return FAILURE;
     }
 
     // Create inode for new directory if possible
     inode_index = inode_create(DIRECTORY);
     if (inode_index == FAILURE) {
+        ERROR_MSG("fs_mkdir: Failed to create new inode");
         return FAILURE;
     }
 
     // Add self link to new directory
     result = dir_add_entry(inode_index, inode_index, ".");
     if (result == FAILURE) {
+        ERROR_MSG("fs_mkdir: Failed to add '.' to new directory");
         inode_free(inode_index);
         return FAILURE;
     }
 
     // Add parent link to new directory
-    result = dir_add_entry(inode_index, wdir.inode, "..");
+    result = dir_add_entry(inode_index, wdir, "..");
     if (result == FAILURE) {
+        ERROR_MSG("fs_mkdir: Failed to add '..' to new directory");
         inode_free(inode_index);
         return FAILURE;
     }
 
     // Link to new directory from working directory
-    result = dir_add_entry(wdir.inode, inode_index, fileName);
+    result = dir_add_entry(wdir, inode_index, fileName);
     if (result == FAILURE) {
+        ERROR_MSG("fs_mkdir: Failed to add entry to working directory");
         inode_free(inode_index);
         return FAILURE;
     }
@@ -778,32 +929,38 @@ int fs_rmdir(char *fileName) {
     int inode_index;
     inode_t *inode;
     char inode_buf[BLOCK_SIZE];
-    int result;
 
-    // Cannot remove self or parent meta-entries
+    // Fail if fileName is NULL
+    if (fileName == NULL) {
+        ERROR_MSG("fs_rmdir: fileName cannot be NULL");
+        return FAILURE;
+    }
+
+    // Cannot remove self or parent meta-directory entries
     if (same_string(fileName, ".") || same_string(fileName, "..")) {
+        ERROR_MSG("fs_rmdir: Specified directory cannot be removed");
         return FAILURE;
     }
 
     // Attempt to find entry in working directory
-    inode_index = dir_find_entry(wdir.inode, fileName);
+    inode_index = dir_find_entry(wdir, fileName);
     if (inode_index == FAILURE) {
+        ERROR_MSG("fs_rmdir: Specified directory does not exist");
         return FAILURE;
     }
 
     // Fail if entry is not a directory
     inode = inode_read(inode_index, inode_buf);
     if (inode->type != DIRECTORY) {
+        ERROR_MSG("fs_rmdir: Specified file is not a directory");
         return FAILURE;
     }
 
     // Free directory inode on disk
-    result = inode_free(inode_index);
-    ASSERT(result != FAILURE);
+    inode_free(inode_index);
 
     // Remove entry from working directory
-    result = dir_remove_entry(wdir.inode, fileName);
-    ASSERT(result != FAILURE);
+    dir_remove_entry(wdir, fileName);
 
     return SUCCESS;
 }
@@ -819,25 +976,24 @@ int fs_cd(char *dirName) {
     // Move to parent directory if attempting to cd to ".."
     if (same_string(dirName, "..")) {
         // Find inode of parent directory
-        inode_index = dir_find_entry(wdir.inode, "..");
+        inode_index = dir_find_entry(wdir, "..");
         ASSERT(inode_index != FAILURE);
 
-        // Set working directory to parent and update path
-        wdir.inode = inode_index;
-        wdir_truncate_path();
+        // Set working directory to parent
+        wdir = inode_index;
 
         return SUCCESS;
     }
 
     // Attempt to find entry in working directory
-    inode_index = dir_find_entry(wdir.inode, dirName);
+    inode_index = dir_find_entry(wdir, dirName);
     if (inode_index == FAILURE) {
+        ERROR_MSG("fs_cd: Specified directory does not exist");
         return FAILURE;
     }
 
-    // Set working directory to child and update path
-    wdir.inode = inode_index;
-    wdir_append_path(dirName);
+    // Update working directory
+    wdir = inode_index;
 
     return SUCCESS;
 }
