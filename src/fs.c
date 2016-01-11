@@ -29,7 +29,7 @@ static int min(int x, int y) {
 }
 
 static void str_copy(char *src, char *dest) {
-    bcopy((unsigned char *)src, (unsigned char *)dest, strlen(src));
+    bcopy((unsigned char *)src, (unsigned char *)dest, strlen(src) + 1);
 }
 
 /* Super block ***************************************************************/
@@ -149,7 +149,7 @@ static void inode_init(inode_t *inode, int type) {
     ASSERT(type == FILE_TYPE || type == DIRECTORY);
 
     inode->type = type;
-    inode->links = 0;
+    inode->links = 1;
     inode->fd_count = 0;
     inode->size = 0;
     bzero((char *)inode->blocks, sizeof(inode->blocks));
@@ -270,9 +270,7 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
 
     // Fail if too many entries in directory
     block_entries = BLOCK_SIZE / sizeof(entry_t);
-    printf("block_entries = %d\n", block_entries);
     curr_entries = inode->size / sizeof(entry_t);
-    printf("curr_entries = %d\n", curr_entries);
     if (curr_entries >= block_entries * INODE_ADDRS) {
         ERROR_MSG("dir_add_entry: Too many entries in directory");
         return FAILURE;
@@ -286,9 +284,13 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
         data_read(inode->blocks[i], data_buf);
         entries = (entry_t *)data_buf;
         for (j = 0; j < block_entries; j++) {
+            //printf("add: entries[%d].in_use = %d\n", j, entries[j].in_use);
+            //printf("add: entries[%d].name = %s\n", j, entries[j].name);
             if (!entries[j].in_use) {
                 // Add new entry to directory
+                //printf("add: new_entry.name = %s\n", new_entry.name);
                 entries[j] = new_entry;
+                //printf("add: entries[%d].name = %s\n", j, entries[j].name);
                 data_write(inode->blocks[i], data_buf);
 
                 // Write changes to inode on disk
@@ -300,8 +302,11 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
         }
     }
 
+    //printf("Allocating new data block...\n");
+
     // All entries used, so try to allocate new block
     new_block = block_alloc();
+    //printf("new_block = %d\n", new_block);
     if (new_block == FAILURE) {
         ERROR_MSG("dir_add_entry: Failed to allocate new data block");
         return FAILURE;
@@ -375,6 +380,8 @@ static int dir_find_entry(int dir_inode, char *name) {
         entries = (entry_t *)data_buf;
         for (j = 0; j < block_entries; j++) {
             // If entry matches, return its inode number
+            //printf("find: entries[%d].in_use = %d\n", j, entries[j].in_use);
+            //printf("find: entries[%d].name = %s\n", j, entries[j].name);
             if (entries[j].in_use && same_string(entries[j].name, name)) {
                 return entries[j].inode;
             }
@@ -479,6 +486,7 @@ int fs_mkfs(void) {
     inode_write(ROOT_DIR, block_buf);
 
     // Add "." self link meta-directory to root
+    //printf("Adding '.' to root dir...\n");
     result = dir_add_entry(ROOT_DIR, ROOT_DIR, ".");
     if (result == FAILURE) {
         ERROR_MSG("fs_mkfs: Failed to add '.' to root directory");
@@ -487,6 +495,7 @@ int fs_mkfs(void) {
     }
 
     // Add ".." parent (self) link meta-directory to root
+    //printf("Adding '..' to root dir...\n");
     result = dir_add_entry(ROOT_DIR, ROOT_DIR, "..");
     if (result == FAILURE) {
         ERROR_MSG("fs_mkfs: Failed to add '..' to root directory");
@@ -997,7 +1006,55 @@ int fs_cd(char *dirName) {
 }
 
 int fs_link(char *old_fileName, char *new_fileName) {
-    return -1;
+    int inode_index;
+    inode_t *inode;
+    char inode_buf[BLOCK_SIZE];
+    int result;
+
+    // Fail if old_fileName is NULL
+    if (old_fileName == NULL) {
+        ERROR_MSG("fs_link: old_fileName cannot be NULL");
+        return FAILURE;
+    }
+
+    // Fail if new_fileName is NULL
+    if (new_fileName == NULL) {
+        ERROR_MSG("fs_link: new_fileName cannot be NULL");
+        return FAILURE;
+    }
+
+    // Fail if directory has file with same name as new link
+    if (dir_find_entry(wdir, new_fileName) != FAILURE) {
+        ERROR_MSG("fs_link: An entry with the given link name already exists");
+        return FAILURE;
+    }
+
+    // Attempt to find old file in working directory
+    inode_index = dir_find_entry(wdir, old_fileName);
+    if (inode_index == FAILURE) {
+        ERROR_MSG("fs_link: Specified file does not exist");
+        return FAILURE;
+    }
+
+    // Read old file inode from disk, fail if not a file
+    inode = inode_read(inode_index, inode_buf);
+    ASSERT(inode->type != FREE_INODE);
+    if (inode->type == DIRECTORY) {
+        ERROR_MSG("fs_link: Cannot create link to a directory");
+    }
+
+    // Attempt to add new link to working directory
+    result = dir_add_entry(wdir, inode_index, new_fileName);
+    if (result == FAILURE) {
+        ERROR_MSG("fs_link: Failed to add link to working directory");
+        return FAILURE;
+    }
+
+    // Increment link count of old file inode on disk
+    inode->links++;
+    inode_write(inode_index, inode_buf);
+    
+    return SUCCESS;
 }
 
 int fs_unlink(char *fileName) {
