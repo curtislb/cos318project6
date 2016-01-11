@@ -240,25 +240,16 @@ static void inode_free(int index) {
 // Current working directory inode
 static int wdir;
 
-static void entry_init(entry_t *entry, int inode, char *name) {
-    ASSERT(entry != NULL);
-    ASSERT(inode >= 0 && inode < MAX_FILE_COUNT);
-    ASSERT(name != NULL);
-
-    entry->in_use = TRUE;
-    entry->inode = inode;
-    str_copy(name, entry->name);
-}
-
 static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
-    int i, j;
     inode_t *inode;
     char inode_buf[BLOCK_SIZE];
     char data_buf[BLOCK_SIZE];
     int block_entries;
     int curr_entries;
-    entry_t *entries;
     entry_t new_entry;
+    entry_t *entries;
+    int block_index;
+    int entry_offset;
     int new_block;
 
     ASSERT(dir_inode >= 0 && dir_inode < MAX_FILE_COUNT);
@@ -267,6 +258,7 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
 
     // Read directory inode from disk
     inode = inode_read(dir_inode, inode_buf);
+    ASSERT(inode->type == DIRECTORY);
 
     // Fail if too many entries in directory
     block_entries = BLOCK_SIZE / sizeof(entry_t);
@@ -277,48 +269,29 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
     }
 
     // Initialize new directory entry
-    entry_init(&new_entry, entry_inode, name);
+    new_entry.inode = entry_inode;
+    str_copy(name, new_entry.name);
 
-    // Search for free entry in used blocks
-    for (i = 0; i < inode->used_blocks; i++) {
-        data_read(inode->blocks[i], data_buf);
-        entries = (entry_t *)data_buf;
-        for (j = 0; j < block_entries; j++) {
-            //printf("add: entries[%d].in_use = %d\n", j, entries[j].in_use);
-            //printf("add: entries[%d].name = %s\n", j, entries[j].name);
-            if (!entries[j].in_use) {
-                // Add new entry to directory
-                //printf("add: new_entry.name = %s\n", new_entry.name);
-                entries[j] = new_entry;
-                //printf("add: entries[%d].name = %s\n", j, entries[j].name);
-                data_write(inode->blocks[i], data_buf);
+    // Determine index of data block and offset within block
+    block_index = curr_entries / block_entries;
+    entry_offset = curr_entries % block_entries;
 
-                // Write changes to inode on disk
-                inode->size += sizeof(entry_t);
-                inode_write(dir_inode, inode_buf);
-
-                return SUCCESS;
-            }
+    // Allocate new data block if necessary
+    if (block_index >= inode->used_blocks) {
+        new_block = block_alloc();
+        if (new_block == FAILURE) {
+            ERROR_MSG("dir_add_entry: Failed to allocate new data block");
+            return FAILURE;
         }
+        inode->blocks[block_index] = new_block;
+        inode->used_blocks++;
     }
 
-    //printf("Allocating new data block...\n");
-
-    // All entries used, so try to allocate new block
-    new_block = block_alloc();
-    //printf("new_block = %d\n", new_block);
-    if (new_block == FAILURE) {
-        ERROR_MSG("dir_add_entry: Failed to allocate new data block");
-        return FAILURE;
-    }
-    inode->blocks[inode->used_blocks] = new_block;
-    inode->used_blocks++;
-
-    // Add entry to newly allocated block
-    bzero_block(data_buf);
+    // Add entry to data block
+    data_read(block_index, data_buf);
     entries = (entry_t *)data_buf;
-    entries[0] = new_entry;
-    data_write(new_block, data_buf);
+    entries[entry_offset] = new_entry;
+    data_write(block_index, data_buf);
 
     // Write changes to inode on disk
     inode->size += sizeof(entry_t);
@@ -328,29 +301,51 @@ static int dir_add_entry(int dir_inode, int entry_inode, char *name) {
 }
 
 static int dir_remove_entry(int dir_inode, char *name) {
-    int i, j;
     inode_t *inode;
     char inode_buf[BLOCK_SIZE];
-    char data_buf[BLOCK_SIZE];
+    char data_buf[BLOCK_SIZE], last_data_buf[BLOCK_SIZE];
+    entry_t *entries, *last_entries;
+    int block, last_block;
+    int entry, last_entry;
     int block_entries;
-    entry_t *entries;
+    int curr_entries;
+    int entry_limit;
 
     ASSERT(dir_inode >= 0 && dir_inode < MAX_FILE_COUNT);
     ASSERT(name != NULL);
 
     // Read directory inode from disk
     inode = inode_read(dir_inode, inode_buf);
+    ASSERT(inode->type == DIRECTORY);
 
     // Search for matching entry in used blocks
+    entries = (entry_t *)data_buf;
     block_entries = BLOCK_SIZE / sizeof(entry_t);
-    for (i = 0; i < inode->used_blocks; i++) {
-        data_read(inode->blocks[i], data_buf);
-        entries = (entry_t *)data_buf;
-        for (j = 0; j < block_entries; j++) {
-            if (entries[j].in_use && same_string(entries[j].name, name)) {
-                // Mark entry as free on disk
-                entries[j].in_use = FALSE;
-                data_write(inode->blocks[i], data_buf);
+    curr_entries = inode->size / sizeof(entry_t);
+    for (block = 0; block < inode->used_blocks; block++) {
+        data_read(inode->blocks[block], data_buf);
+        entry_limit = min(block_entries, curr_entries - block*block_entries);
+        for (entry = 0; entry < entry_limit; entry++) {
+            if (same_string(entries[entry].name, name)) {
+                // Determine block index and offset of last entry
+                last_block = inode->used_blocks - 1;
+                last_entry = (curr_entries - 1) % block_entries;
+
+                // Replace removed entry with last entry from disk
+                data_read(inode->blocks[last_block], last_data_buf);
+                last_entries = (entry_t *)last_data_buf;
+                entries[entry] = last_entries[last_entry];
+                data_write(inode->blocks[block], data_buf);
+
+                // Free last data block if necessary
+                if (last_entry == 0) {
+                    block_free(inode->blocks[last_block]);
+                    inode->used_blocks--;
+                }
+
+                // Update size of inode and write it to disk
+                inode->size -= sizeof(entry_t);
+                inode_write(dir_inode, inode_buf);
 
                 return SUCCESS;
             }
@@ -363,27 +358,31 @@ static int dir_remove_entry(int dir_inode, char *name) {
 }
 
 static int dir_find_entry(int dir_inode, char *name) {
-    int i, j;
     inode_t *inode;
     char inode_buf[BLOCK_SIZE];
     char data_buf[BLOCK_SIZE];
-    int block_entries;
     entry_t *entries;
+    int block_entries;
+    int curr_entries;
+    int block;
+    int entry;
+    int entry_limit;
 
     // Read directory inode from disk
     inode = inode_read(dir_inode, inode_buf);
+    ASSERT(inode->type == DIRECTORY);
 
     // Search for matching entry in used blocks
+    entries = (entry_t *)data_buf;
     block_entries = BLOCK_SIZE / sizeof(entry_t);
-    for (i = 0; i < inode->used_blocks; i++) {
-        data_read(inode->blocks[i], data_buf);
-        entries = (entry_t *)data_buf;
-        for (j = 0; j < block_entries; j++) {
+    curr_entries = inode->size / sizeof(entry_t);
+    for (block = 0; block < inode->used_blocks; block++) {
+        data_read(inode->blocks[block], data_buf);
+        entry_limit = min(block_entries, curr_entries - block*block_entries);
+        for (entry = 0; entry < entry_limit; entry++) {
             // If entry matches, return its inode number
-            //printf("find: entries[%d].in_use = %d\n", j, entries[j].in_use);
-            //printf("find: entries[%d].name = %s\n", j, entries[j].name);
-            if (entries[j].in_use && same_string(entries[j].name, name)) {
-                return entries[j].inode;
+            if (same_string(entries[entry].name, name)) {
+                return entries[entry].inode;
             }
         }
     }
@@ -393,8 +392,40 @@ static int dir_find_entry(int dir_inode, char *name) {
     return FAILURE;
 }
 
-// static void dir_defragment(int dir_inode) {
-//     // TODO: fill this in
+// static int dir_entry_name(int dir_inode, int index, char *buf) {
+//     inode_t *inode;
+//     char inode_buf[BLOCK_SIZE];
+//     char data_buf[BLOCK_SIZE];
+//     int block_entries;
+//     int block_index;
+//     int entry_offset;
+//     entry_t *entries;
+
+//     ASSERT(dir_inode >= 0 && dir_inode < MAX_FILE_COUNT);
+//     ASSERT(index >= 0);
+//     ASSERT(buf != NULL);
+
+//     // Read directory inode from disk
+//     inode = inode_read(dir_inode, inode_buf);
+//     ASSERT(inode->type == DIRECTORY);
+
+//     // Fail if index is too large for directory
+//     if (index >= inode->size / sizeof(entry_t)) {
+//         ERROR_MSG("dir_entry_name: Specified index too large for directory");
+//         return FAILURE;
+//     }
+
+//     // Determine index of data block and offset within block
+//     block_entries = BLOCK_SIZE / sizeof(entry_t);
+//     block_index = index / block_entries;
+//     entry_offset = index % block_entries;
+
+//     // Copy entry name from disk to string buffer
+//     data_read(inode->blocks[block_index], data_buf);
+//     entries = (entry_t *)data_buf;
+//     str_copy(entries[entry_offset].name, buf);
+
+//     return SUCCESS;
 // }
 
 /* File descriptor table *****************************************************/
@@ -1056,6 +1087,7 @@ int fs_link(char *old_fileName, char *new_fileName) {
     }
 
     // Increment link count of old file inode on disk
+    inode = inode_read(inode_index, inode_buf);
     inode->links++;
     inode_write(inode_index, inode_buf);
     
@@ -1088,7 +1120,11 @@ int fs_unlink(char *fileName) {
         return FAILURE;
     }
 
+    // Remove file entry from directory
+    dir_remove_entry(wdir, fileName);
+
     // Decrement link count and delete file if necessary
+    inode = inode_read(inode_index, inode_buf);
     inode->links--;
     if (inode->links == 0 && inode->fd_count == 0) {
         inode_free(inode_index);

@@ -24,10 +24,9 @@ int fs_stat(char *fileName, fileStat *buf);
 int fs_ls_one(int index, char *buf);
 
 #define MAX_FILE_NAME 32
-#define MAX_PATH_NAME 256 /* This is the maximum supported "full" path len,
-    eg: /foo/bar/test.txt, rather than the maximum individual filename len. */
+#define MAX_PATH_NAME 256 
 
-#define MAX_FILE_COUNT 1000
+#define MAX_FILE_COUNT 1536
 
 #define SUCCESS 0
 #define FAILURE -1
@@ -72,11 +71,10 @@ typedef struct {
 
 #define ROOT_DIR 0
 
-#define ENTRY_PADDING 28
+#define ENTRY_PADDING 29
 
 typedef struct {
     short inode; // Corresponding inode index on disk
-    uint8_t in_use; // Is this entry currently in use?
     char name[MAX_FILE_NAME + 1]; // File name of the entry
     char _padding[ENTRY_PADDING];
 } entry_t;

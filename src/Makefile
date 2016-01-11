@@ -33,10 +33,10 @@ PROCESS_LOCATION   = 0x1000000
 #						Define macro PROCESS_START as $(PROCESS_LOCATION). The macro is
 #						used by the C preprocessor.
 
-CFLAGS = -fno-builtin-strlen -fno-builtin-bcopy -fno-builtin-bzero
+CFLAGS = -Werror -fno-builtin-strlen -fno-builtin-bcopy -fno-builtin-bzero
 
 #-fomit-frame-pointer
-CCOPTS = -Wall -Werror -O1 -c -fno-builtin -fno-stack-protector -fno-defer-pop \
+CCOPTS = -Wall -O1 -c -fno-builtin -fno-stack-protector -fno-defer-pop \
 		 -DPROCESS_START=$(PROCESS_LOCATION) \
 		 -DKERNEL_START=$(KERNEL_LOCATION) \
 		 -m32
