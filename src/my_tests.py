@@ -36,7 +36,6 @@ def open_tests():
 
     # Try to open new file read-only (should fail)
     issue('open fake 1')
-    issue('ls')
 
     # Try to open file with bad flags (should fail)
     issue('open a 0')
@@ -73,7 +72,6 @@ def close_tests():
 
     # Try to close a non-existent fd (should fail)
     issue('close 0')
-    issue('ls')
 
     # Try to close bad fd's (should fail)
     issue('close -1')
@@ -82,11 +80,10 @@ def close_tests():
 
     # Open a file and then close it
     issue('open a 3')
-    issue('ls')
     issue('close 0')
     issue('ls')
 
-    # Open a directory and then close it twice
+    # Open a directory and then close it
     issue('open .. 1')
     issue('close 0')
 
@@ -117,7 +114,6 @@ def read_tests():
     issue('open a 1')
     issue('close 0')
     issue('read 0 1')
-    issue('ls')
 
     # Read from a directory
     issue('open . 1')
@@ -189,7 +185,6 @@ def write_tests():
     issue('open a 2')
     issue('close 0')
     issue('write 0 x')
-    issue('ls')
 
     # Write to write-only and read-write files but not read-only
     issue('open a 1')
@@ -425,6 +420,7 @@ def misc_tests():
     # Create a file with max name length and max size
     issue('create ' + ('.' * 32) + ' 4096')
     issue('ls')
+    issue('cat ' + ('.' * 32))
 
     # Traverse deeply nested directory
     issue('mkfs')
@@ -445,11 +441,7 @@ def misc_tests():
         issue('unlink f' + str((i * 2) % 6))
         issue('link f f' + str((i * 2) % 6))
     issue('ls')
-
-    # Cat a big file
-    issue('mkfs')
-    issue('create a 1000')
-    issue('cat a')
+    
 
     print do_exit()
     print '***********************'
