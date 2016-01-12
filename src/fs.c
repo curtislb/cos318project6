@@ -504,7 +504,7 @@ int fs_close(int fd) {
     char inode_buf[BLOCK_SIZE];
 
     // Fail if given bad file descriptor
-    if (fd < 0 || fd >= MAX_FILE_COUNT) {
+    if (fd < 0 || fd >= MAX_FD_ENTRIES) {
         return FAILURE;
     }
 
@@ -579,17 +579,14 @@ int fs_read(int fd, char *buf, int count) {
     // Read file inode from disk
     inode = inode_read(file->inode, inode_buf);
 
-
     // Read no more than remaining bytes in file
     avail_bytes = inode->size - file->cursor;
-    if (count > avail_bytes) {
-        count = avail_bytes;
-    }
+    count = min(count, avail_bytes);
 
     // Read count bytes from file blocks to buffer
     bytes_read = 0;
     index_start = file->cursor / BLOCK_SIZE;
-    for (i = index_start; bytes_read < count && i < INODE_ADDRS; i++) {
+    for (i = index_start; bytes_read < count; i++) {
         // Read file data block from disk
         data_read(inode->blocks[i], data_buf);
 
@@ -665,7 +662,6 @@ int fs_write(int fd, char *buf, int count) {
 
     // Read file inode from disk
     inode = inode_read(file->inode, inode_buf);
-
 
     // If cursor after end of file, pad with zeros up to cursor
     index_start = inode->size / BLOCK_SIZE;
