@@ -616,7 +616,6 @@ int fs_write(int fd, char *buf, int count) {
     inode_t *inode;
     char inode_buf[BLOCK_SIZE];
     char data_buf[BLOCK_SIZE];
-    int old_cursor;
     int index_start;
     int old_used_blocks;
     int bytes_written;
@@ -699,7 +698,6 @@ int fs_write(int fd, char *buf, int count) {
 
     // Write count bytes from buffer to file blocks on disk
     bytes_written = 0;
-    old_cursor = file->cursor;
     index_start = file->cursor / BLOCK_SIZE;
     for (i = index_start; bytes_written < count && i < INODE_ADDRS; i++) {
         // Allocate new data block if necessary
@@ -735,10 +733,14 @@ int fs_write(int fd, char *buf, int count) {
         // Update cursor and byte count
         file->cursor += to_write;
         bytes_written += to_write;
+
+        // Update file size if necessary
+        if (inode->size < file->cursor) {
+            inode->size = file->cursor;
+        }
     }
 
-    // Increase file size, write updated inode to disk
-    inode->size += bytes_written - (inode->size - old_cursor);
+    // Write updated inode to disk
     inode_write(file->inode, inode_buf);
 
     return bytes_written;

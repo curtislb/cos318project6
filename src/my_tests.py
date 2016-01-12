@@ -218,6 +218,13 @@ def write_tests():
     issue('write 0 do_you_wanna_have_a_bad_time?')
     issue('cat s')
 
+    # Write to different points in file
+    issue('lseek 0 7')
+    issue('write 0 dirty')
+    issue('lseek 0 31')
+    issue('write 0 bit')
+    issue('cat s')
+
     print do_exit()
     print '***********************'
     sys.stdout.flush()
@@ -442,7 +449,6 @@ def misc_tests():
         issue('link f f' + str((i * 2) % 6))
     issue('ls')
     
-
     print do_exit()
     print '***********************'
     sys.stdout.flush()
