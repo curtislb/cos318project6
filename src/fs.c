@@ -478,7 +478,6 @@ int fs_mkfs(void) {
     inode_write(ROOT_DIR, block_buf);
 
     // Add "." self link meta-directory to root
-    //printf("Adding '.' to root dir...\n");
     result = dir_add_entry(ROOT_DIR, ROOT_DIR, ".");
     if (result == FAILURE) {
         ERROR_MSG("fs_mkfs: Failed to add '.' to root directory");
@@ -487,7 +486,6 @@ int fs_mkfs(void) {
     }
 
     // Add ".." parent (self) link meta-directory to root
-    //printf("Adding '..' to root dir...\n");
     result = dir_add_entry(ROOT_DIR, ROOT_DIR, "..");
     if (result == FAILURE) {
         ERROR_MSG("fs_mkfs: Failed to add '..' to root directory");
@@ -558,6 +556,13 @@ int fs_open(char *fileName, int flags) {
     
     // Read inode from disk
     inode = inode_read(entry_inode, inode_buf);
+
+    // Fail if attempting to open directory in write mode
+    if (inode->type == DIRECTORY && flags != FS_O_RDONLY) {
+        ERROR_MSG("fs_open: Cannot open a directory for writing");
+        ASSERT(!is_new_file);
+        return FAILURE;
+    }
 
     // Open entry in file descriptor table
     fd = fd_open(entry_inode, flags);
@@ -709,6 +714,7 @@ int fs_write(int fd, char *buf, int count) {
     inode_t *inode;
     char inode_buf[BLOCK_SIZE];
     char data_buf[BLOCK_SIZE];
+    int old_cursor;
     int index_start;
     int old_used_blocks;
     int bytes_written;
@@ -800,6 +806,7 @@ int fs_write(int fd, char *buf, int count) {
 
     // Write count bytes from buffer to file blocks on disk
     bytes_written = 0;
+    old_cursor = file->cursor;
     index_start = file->cursor / BLOCK_SIZE;
     for (i = index_start; bytes_written < count && i < INODE_ADDRS; i++) {
         // Allocate new data block if necessary
@@ -825,6 +832,9 @@ int fs_write(int fd, char *buf, int count) {
         block_offset = file->cursor % BLOCK_SIZE;
         block_bytes = BLOCK_SIZE - block_offset;
         to_write = min(count - bytes_written, block_bytes);
+        // printf("block_offset = %d\n", block_offset);
+        // printf("block_bytes = %d\n", block_bytes);
+        // printf("to_write = %d\n", to_write);
 
         // Write bytes to data block on disk
         bcopy(
@@ -839,7 +849,8 @@ int fs_write(int fd, char *buf, int count) {
         bytes_written += to_write;
     }
 
-    // Write updated inode to disk
+    // Increase file size, write updated inode to disk
+    inode->size += bytes_written - (inode->size - old_cursor);
     inode_write(file->inode, inode_buf);
 
     return bytes_written;
@@ -896,7 +907,6 @@ int fs_mkdir(char *fileName) {
     }
 
     // Add self link to new directory
-    printf("Adding '.' ...\n");
     result = dir_add_entry(inode_index, inode_index, ".");
     if (result == FAILURE) {
         ERROR_MSG("fs_mkdir: Failed to add '.' to new directory");
@@ -905,7 +915,6 @@ int fs_mkdir(char *fileName) {
     }
 
     // Add parent link to new directory
-    printf("Adding '..' ...\n");
     result = dir_add_entry(inode_index, wdir, "..");
     if (result == FAILURE) {
         ERROR_MSG("fs_mkdir: Failed to add '..' to new directory");
@@ -914,7 +923,6 @@ int fs_mkdir(char *fileName) {
     }
 
     // Link to new directory from working directory
-    printf("Adding subdir ...\n");
     result = dir_add_entry(wdir, inode_index, fileName);
     if (result == FAILURE) {
         ERROR_MSG("fs_mkdir: Failed to add entry to working directory");
@@ -956,7 +964,7 @@ int fs_rmdir(char *fileName) {
         return FAILURE;
     }
 
-    // Fail if working directory contains entries
+    // Fail if working directory contains additional entries
     if (inode->size > 2 * sizeof(entry_t)) {
         ERROR_MSG("fs_rmdir: Cannot remove non-empty directory");
         return FAILURE;
