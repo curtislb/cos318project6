@@ -1,5 +1,5 @@
 /*
- * Author(s): <Your name here>
+ * Author(s): Curtis Belmonte
  * COS 318, Fall 2015: Project 6 File System.
  * Implementation of a Unix-like file system.
 */
