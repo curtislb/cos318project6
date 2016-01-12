@@ -81,6 +81,8 @@ typedef struct {
 
 /* File descriptor table *****************************************************/
 
+#define MAX_FD_ENTRIES 256
+
 typedef struct {
     bool_t is_open; // Is this fd table entry open?
     int cursor; // Current r/w position in file (in bytes)

@@ -185,17 +185,27 @@ def test_get_all_handles():
     issue('mkdir d1')
     issue('mkdir d2')
     issue('mkdir d3')
+    issue('mkdir d4')
+    issue('mkdir d5')
     issue('cd d1')
-    for x in range(0,100):
+    for x in range(0,62):
         issue('open f' + str(x) + ' 3')
     issue('cd ..')
     issue('cd d2')
-    for x in range(0,100):
+    for x in range(0,62):
         issue('open f' + str(x) + ' 3')
     issue('cd ..')
     issue('cd d3')        
-    for x in range(0,60):
-        issue('open f' + str(x) + ' 3') #should fail after file handle 255
+    for x in range(0,62):
+        issue('open f' + str(x) + ' 3')
+    issue('cd ..')
+    issue('cd d4')        
+    for x in range(0,62):
+        issue('open f' + str(x) + ' 3')
+    issue('cd ..')
+    issue('cd d5')        
+    for x in range(0,16):
+        issue('open f' + str(x) + ' 3')#should fail after file handle 255
     print('***************')
     print do_exit()
     sys.stdout.flush()
@@ -207,8 +217,8 @@ def get_inodes(n):
     if n == 0:
         return
     else:
-        for x in range(0,100):
-            issue('open f' + str(x) + ' 3') #should fail after 2047, 3 times
+        for x in range(0,61):
+            issue('open f' + str(x) + ' 3') #should fail after numInodes, 3 times
             issue('close 0')
             n -= 1
             if n == 0:
@@ -224,10 +234,10 @@ def get_inodes(n):
 def test_get_all_inodes():
     print('*****Get All Inodes Test*****')
     # Change this variable if your file system has fewer than 2048 inodes
-    numInodes = 2050
+    numInodes = 1536
     
     issue('mkfs')
-    get_inodes(numInodes)
+    get_inodes(numInodes + 2)
     print do_exit()
     print('***************')
     sys.stdout.flush()
@@ -241,20 +251,26 @@ def all_blocks_test():
     issue('mkdir d1')
     issue('mkdir d2')
     issue('mkdir d3')
+    issue('mkdir d4')
     
     #Create large files in each directory
     issue('cd d1')
-    for i in range(0, 113):
+    for i in range(0, 62):
     	issue('create f' + str(i) + ' 4096') # Max file size is 8*512
     issue('cd ..')
     issue('cd d2')
-    for i in range(0, 113):
+    for i in range(0, 62):
     	issue('create f' + str(i) + ' 4096') # Max file size is 8*512
     issue('cd ..')
     issue('cd d3')
-    for i in range(0, 113):
+    for i in range(0, 62):
     	# Should fail after 1 MB - size of metadata
     	issue('create f' + str(i) + ' 4096') # Max file size is 8*512
+    issue('cd ..')
+    issue('cd d4')
+    for i in range(0, 16):
+        # Should fail after 1 MB - size of metadata
+        issue('create f' + str(i) + ' 4096') # Max file size is 8*512
     
     print do_exit();
     print('***************')
